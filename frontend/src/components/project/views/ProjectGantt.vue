@@ -82,6 +82,7 @@ import FormField from '@/components/input/FormField.vue'
 
 import GanttChart from '@/components/gantt/GanttChart.vue'
 import {useGanttFilters} from '../../../views/project/helpers/useGanttFilters'
+import {useAutoRefresh} from '@/composables/useAutoRefresh'
 import {PERMISSIONS} from '@/constants/permissions'
 
 import type {DateISO} from '@/types/DateISO'
@@ -107,9 +108,17 @@ const {
 	setDefaultFilters,
 	tasks,
 	isLoading,
+	loadTasks,
 	addTask,
 	updateTask,
 } = useGanttFilters(route, viewId)
+
+useAutoRefresh(
+	() => loadTasks(),
+	{
+		resetOn: filters,
+	},
+)
 
 const DEFAULT_DATE_RANGE_DAYS = 7
 
