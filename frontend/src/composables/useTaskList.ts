@@ -141,12 +141,38 @@ export function useTaskList(
 		loadTasks()
 	}, { immediate: true })
 
+	/**
+	 * Silent refresh: re-fetches tasks without clearing the existing list.
+	 * Only changed tasks are updated in-place, so there is no visible flash
+	 * and scroll position is preserved.
+	 */
+	async function silentRefresh() {
+		try {
+			const freshTasks = await taskCollectionService.getAll(...getAllTasksParams.value)
+			// Build lookup of existing tasks by id
+			const existingMap = new Map<number, ITask>()
+			tasks.value.forEach(t => existingMap.set(t.id, t))
+
+			const merged = freshTasks.map(freshTask => {
+				const existing = existingMap.get(freshTask.id)
+				if (existing && existing.updated === freshTask.updated) {
+					return existing // unchanged: keep same object reference
+				}
+				return freshTask
+			})
+			tasks.value = merged
+		} catch {
+			// Silently fail: keep existing data
+		}
+	}
+
 	return {
 		tasks,
 		loading,
 		totalPages,
 		currentPage: page,
 		loadTasks,
+		silentRefresh,
 		params,
 		sortByParam: sortBy,
 	}

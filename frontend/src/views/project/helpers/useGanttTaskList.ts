@@ -17,6 +17,7 @@ export interface UseGanttTaskListReturn {
 	tasks: Ref<Map<ITask['id'], ITask>>
 	isLoading: ComputedRef<boolean>
 	loadTasks: () => Promise<void>
+	silentRefresh: () => Promise<void>
 	addTask: (task: Partial<ITask>) => Promise<ITask>
 	updateTask: (task: ITaskPartialWithId) => Promise<void>
 }
@@ -116,11 +117,39 @@ export function useGanttTaskList<F extends Filters>(
 	}
 
 
+	/**
+	 * Silent refresh: re-fetches tasks and merges into existing Map.
+	 * Only changed tasks are updated, so there is no visible flash.
+	 */
+	async function silentRefresh() {
+		try {
+			const params: TaskFilterParams = filterToApiParams(filters.value)
+			const loadedTasks = await fetchTasks(params)
+			const freshIds = new Set<ITask['id']>()
+			for (const t of loadedTasks) {
+				freshIds.add(t.id)
+				const existing = tasks.value.get(t.id)
+				if (!existing || existing.updated !== t.updated) {
+					tasks.value.set(t.id, t)
+				}
+			}
+			// Remove tasks that no longer match the filter
+			for (const id of tasks.value.keys()) {
+				if (!freshIds.has(id)) {
+					tasks.value.delete(id)
+				}
+			}
+		} catch {
+			// Silently fail: keep existing data
+		}
+	}
+
 	return {
 		tasks,
 
 		isLoading,
 		loadTasks,
+		silentRefresh,
 
 		addTask,
 		updateTask,

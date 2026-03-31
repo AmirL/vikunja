@@ -141,6 +141,7 @@ export function useGanttFilters(route: Ref<RouteLocationNormalized>, viewId: Ref
 	const {
 		tasks,
 		loadTasks,
+		silentRefresh,
 
 		isLoading,
 		addTask,
@@ -154,6 +155,7 @@ export function useGanttFilters(route: Ref<RouteLocationNormalized>, viewId: Ref
 
 		tasks,
 		loadTasks,
+		silentRefresh,
 
 		isLoading,
 		addTask,

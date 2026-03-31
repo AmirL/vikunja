@@ -319,6 +319,7 @@ import Popup from '@/components/misc/Popup.vue'
 
 import type {SortBy} from '@/composables/useTaskList'
 import {useTaskList} from '@/composables/useTaskList'
+import {useAutoRefresh} from '@/composables/useAutoRefresh'
 import type {ITask} from '@/modelTypes/ITask'
 import type {IProject} from '@/modelTypes/IProject'
 import AssigneeList from '@/components/tasks/partials/AssigneeList.vue'
@@ -376,6 +377,9 @@ const {
 	sortByParam,
 } = taskList
 const tasks: Ref<ITask[]> = taskList.tasks
+
+// Auto-refresh: silently poll for updates without visible reload
+useAutoRefresh(() => taskList.silentRefresh())
 
 watch(
 	() => activeColumns.value,

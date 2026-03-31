@@ -273,6 +273,96 @@ export const useKanbanStore = defineStore('kanban', () => {
 		}
 	}
 
+	/**
+	 * Silently refresh buckets by merging new data into existing buckets.
+	 * Does NOT clear buckets first, so there is no visible flash, no scroll reset,
+	 * and only changed tasks are updated in-place.
+	 */
+	async function refreshBucketsForProject(pId: IProject['id'], viewId: IProjectView['id'], params) {
+		const taskCollectionService = new TaskCollectionService()
+		try {
+			const freshBuckets: IBucket[] = await taskCollectionService.getAll({projectId: pId, viewId}, {
+				...params,
+				expand: ['comment_count', 'is_unread'],
+				per_page: TASKS_PER_BUCKET,
+			})
+
+			if (buckets.value.length === 0) {
+				// Nothing to merge into, just set them
+				setBuckets(freshBuckets)
+				setProjectId(pId)
+				return freshBuckets
+			}
+
+			// Build a map of existing buckets by id for quick lookup
+			const existingMap = new Map<IBucket['id'], number>()
+			buckets.value.forEach((b, i) => existingMap.set(b.id, i))
+
+			for (const freshBucket of freshBuckets) {
+				const existingIndex = existingMap.get(freshBucket.id)
+				if (existingIndex === undefined) {
+					// New bucket added externally
+					buckets.value.push(freshBucket)
+					taskPagesPerBucket.value[freshBucket.id] = 1
+					allTasksLoadedForBucket.value[freshBucket.id] = false
+					continue
+				}
+
+				const existing = buckets.value[existingIndex]
+
+				// Update bucket metadata (title, limit, count, position) without touching tasks
+				const updatedBucket = {
+					...existing,
+					title: freshBucket.title,
+					limit: freshBucket.limit,
+					count: freshBucket.count,
+					position: freshBucket.position,
+				}
+
+				// Merge tasks: update existing, add new, remove deleted
+				const existingTaskMap = new Map<ITask['id'], number>()
+				existing.tasks.forEach((t, i) => existingTaskMap.set(t.id, i))
+
+				const freshTaskIds = new Set<ITask['id']>()
+				const mergedTasks: ITask[] = []
+
+				for (const freshTask of freshBucket.tasks) {
+					freshTaskIds.add(freshTask.id)
+					const existingTaskIndex = existingTaskMap.get(freshTask.id)
+					if (existingTaskIndex !== undefined) {
+						// Task exists: update only if changed
+						const existingTask = existing.tasks[existingTaskIndex]
+						if (existingTask.updated !== freshTask.updated) {
+							mergedTasks.push(freshTask)
+						} else {
+							mergedTasks.push(existingTask)
+						}
+					} else {
+						// New task
+						mergedTasks.push(freshTask)
+					}
+				}
+
+				updatedBucket.tasks = mergedTasks
+				buckets.value[existingIndex] = updatedBucket
+			}
+
+			// Remove buckets that no longer exist
+			const freshBucketIds = new Set(freshBuckets.map(b => b.id))
+			for (let i = buckets.value.length - 1; i >= 0; i--) {
+				if (!freshBucketIds.has(buckets.value[i].id)) {
+					buckets.value.splice(i, 1)
+				}
+			}
+
+			setProjectId(pId)
+			return freshBuckets
+		} catch {
+			// Silently fail: keep existing data
+			return buckets.value
+		}
+	}
+
 	async function loadNextTasksForBucket(
 		projectId: IProject['id'],
 		viewId: IProjectView['id'],
@@ -389,6 +479,7 @@ export const useKanbanStore = defineStore('kanban', () => {
 		removeTaskInBucket,
 		moveTaskToBucket,
 		loadBucketsForProject,
+		refreshBucketsForProject,
 		loadNextTasksForBucket,
 		createBucket,
 		deleteBucket,
