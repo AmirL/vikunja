@@ -321,6 +321,7 @@ import {
 import {calculateItemPosition} from '@/helpers/calculateItemPosition'
 
 import {isSavedFilter, useSavedFilter} from '@/services/savedFilter'
+import {useAutoRefresh} from '@/composables/useAutoRefresh'
 import {useTaskDragToProject} from '@/composables/useTaskDragToProject'
 import {success} from '@/message'
 import {useProjectStore} from '@/stores/projects'
@@ -502,6 +503,22 @@ watch(
 	{
 		immediate: true,
 		deep: true,
+	},
+)
+
+const isKanbanInteracting = computed(() =>
+	drag.value || dragBucket.value || newTaskInputFocused.value || bucketTitleEditable.value,
+)
+
+useAutoRefresh(
+	() => kanbanStore.loadBucketsForProject(projectId.value, props.viewId, params.value),
+	{
+		isUserInteracting: isKanbanInteracting,
+		resetOn: () => ({
+			params: params.value,
+			projectId: projectId.value,
+			viewId: props.viewId,
+		}),
 	},
 )
 

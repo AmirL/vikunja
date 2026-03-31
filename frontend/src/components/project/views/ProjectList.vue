@@ -112,6 +112,7 @@ import Pagination from '@/components/misc/Pagination.vue'
 import {ALPHABETICAL_SORT} from '@/components/project/partials/Filters.vue'
 
 import {useTaskList} from '@/composables/useTaskList'
+import {useAutoRefresh} from '@/composables/useAutoRefresh'
 import {useTaskDragToProject} from '@/composables/useTaskDragToProject'
 import {shouldShowTaskInListView} from '@/composables/useTaskListFiltering'
 import {PERMISSIONS as Permissions} from '@/constants/permissions'
@@ -193,6 +194,14 @@ const canWrite = computed(() => {
 })
 
 const isPseudoProject = computed(() => (project.value && isSavedFilter(project.value)) || project.value?.id === -1)
+
+useAutoRefresh(
+	() => loadTasks(false),
+	{
+		isUserInteracting: drag,
+		resetOn: () => JSON.stringify(params.value),
+	},
+)
 
 onMounted(async () => {
 	await nextTick()
