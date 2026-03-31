@@ -333,6 +333,7 @@ import ProjectViewService from '@/services/projectViews'
 import ProjectViewModel from '@/models/projectView'
 import TaskBucketService from '@/services/taskBucket'
 import TaskBucketModel from '@/models/taskBucket'
+import {useAutoRefresh} from '@/composables/useAutoRefresh'
 
 const props = defineProps<{
 	isLoadingProject: boolean,
@@ -502,6 +503,15 @@ watch(
 	{
 		immediate: true,
 		deep: true,
+	},
+)
+
+// Auto-refresh: silently poll for updates without visible reload
+const isNewTaskInputOpen = computed(() => showNewTaskInput.value !== null)
+useAutoRefresh(
+	() => kanbanStore.refreshBucketsForProject(projectId.value, props.viewId, params.value),
+	{
+		interactionRefs: [drag, dragBucket, newTaskInputFocused, isNewTaskInputOpen, bucketTitleEditable],
 	},
 )
 
