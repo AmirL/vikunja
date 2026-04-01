@@ -87,6 +87,7 @@ import {PERMISSIONS} from '@/constants/permissions'
 import type {DateISO} from '@/types/DateISO'
 import type {ITask} from '@/modelTypes/ITask'
 import type {IProjectView} from '@/modelTypes/IProjectView'
+import {useAutoRefresh} from '@/composables/useAutoRefresh'
 
 type Options = Flatpickr.Options.Options
 
@@ -107,9 +108,13 @@ const {
 	setDefaultFilters,
 	tasks,
 	isLoading,
+	silentRefresh,
 	addTask,
 	updateTask,
 } = useGanttFilters(route, viewId)
+
+// Auto-refresh: silently poll for updates without visible reload
+useAutoRefresh(() => silentRefresh())
 
 const DEFAULT_DATE_RANGE_DAYS = 7
 

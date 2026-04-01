@@ -112,6 +112,7 @@ import Pagination from '@/components/misc/Pagination.vue'
 import {ALPHABETICAL_SORT} from '@/components/project/partials/Filters.vue'
 
 import {useTaskList} from '@/composables/useTaskList'
+import {useAutoRefresh} from '@/composables/useAutoRefresh'
 import {useTaskDragToProject} from '@/composables/useTaskDragToProject'
 import {shouldShowTaskInListView} from '@/composables/useTaskListFiltering'
 import {PERMISSIONS as Permissions} from '@/constants/permissions'
@@ -147,6 +148,7 @@ const {
 	totalPages,
 	currentPage,
 	loadTasks,
+	silentRefresh,
 	params,
 	sortByParam,
 } = useTaskList(
@@ -157,6 +159,9 @@ const {
 		? ['comment_count', 'is_unread']
 		: ['subtasks', 'comment_count', 'is_unread'],
 )
+
+// Auto-refresh: silently poll for updates without visible reload
+useAutoRefresh(() => silentRefresh(), {interactionRefs: [drag]})
 
 const taskPositionService = ref(new TaskPositionService())
 
