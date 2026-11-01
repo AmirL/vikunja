@@ -22,6 +22,7 @@ import (
 
 	"code.vikunja.io/api/pkg/config"
 	"code.vikunja.io/api/pkg/events"
+	"code.vikunja.io/api/pkg/log"
 	"code.vikunja.io/api/pkg/notifications"
 	"golang.org/x/crypto/bcrypt"
 	"xorm.io/xorm"
@@ -32,8 +33,12 @@ const (
 	IssuerLDAP  = `ldap`
 )
 
+type CreateUserOptions struct {
+	SkipEmailConfirm bool
+}
+
 // CreateUser creates a new user and inserts it into the database
-func CreateUser(s *xorm.Session, user *User) (newUser *User, err error) {
+func CreateUser(s *xorm.Session, user *User, options ...CreateUserOptions) (newUser *User, err error) {
 
 	if user.Issuer == "" {
 		user.Issuer = IssuerLocal
@@ -71,6 +76,9 @@ func CreateUser(s *xorm.Session, user *User) (newUser *User, err error) {
 	user.DefaultProjectID = config.DefaultSettingsDefaultProjectID.GetInt64()
 	user.WeekStart = config.DefaultSettingsWeekStart.GetInt()
 	user.Timezone = config.DefaultSettingsTimezone.GetString()
+	if user.Timezone == "" {
+		user.Timezone = config.GetTimeZone().String()
+	}
 
 	if user.Language == "" {
 		user.Language = config.DefaultSettingsLanguage.GetString()
@@ -93,7 +101,7 @@ func CreateUser(s *xorm.Session, user *User) (newUser *User, err error) {
 	})
 
 	// Don't send a mail if no mailer is configured
-	if !config.MailerEnabled.GetBool() || user.Issuer != IssuerLocal {
+	if !config.MailerEnabled.GetBool() || user.Issuer != IssuerLocal || (len(options) > 0 && options[0].SkipEmailConfirm) {
 		return newUserOut, err
 	}
 
@@ -103,7 +111,15 @@ func CreateUser(s *xorm.Session, user *User) (newUser *User, err error) {
 		return nil, err
 	}
 
+	confirmationUser := *user
+	confirmation := &EmailConfirmNotification{User: &confirmationUser, IsNew: true, ConfirmToken: token.ClearTextToken}
 	_, err = s.
+		After(func(_ any) {
+			// XORM runs this after commit, before the CLI can stop the mail daemon.
+			if notifyErr := notifications.Notify(&confirmationUser, confirmation); notifyErr != nil {
+				log.Errorf("Failed to queue email confirmation for user %d: %v", confirmationUser.ID, notifyErr)
+			}
+		}).
 		Where("id = ?", user.ID).
 		Cols("email", "status").
 		Update(user)
@@ -111,20 +127,103 @@ func CreateUser(s *xorm.Session, user *User) (newUser *User, err error) {
 		return
 	}
 
-	n := &EmailConfirmNotification{
-		User:         user,
-		IsNew:        true,
-		ConfirmToken: token.Token,
+	// Callers passing a stale status to UpdateUser would silently reactivate the account.
+	newUserOut.Status = StatusEmailConfirmationRequired
+	return newUserOut, err
+}
+
+// CreateBotUser creates a bot user owned by the given owner.
+// Bots have no email or password and cannot authenticate interactively.
+// It intentionally bypasses checkIfUserIsValid / checkIfUserExists because
+// those enforce email+password and would flag duplicate empty emails.
+func CreateBotUser(s *xorm.Session, bot *User, owner *User) (*User, error) {
+	if owner == nil || owner.ID == 0 {
+		return nil, ErrNoUsernamePassword{}
+	}
+	if owner.IsBot() {
+		return nil, &ErrBotNotOwned{UserID: owner.ID}
 	}
 
-	err = notifications.Notify(user, n, s)
-	return newUserOut, err
+	// Reuse the same username format rules as regular user creation
+	if err := checkUsernameFormat(bot.Username); err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(bot.Username, "bot-") {
+		return nil, &ErrBotUsernameMustHavePrefix{Username: bot.Username}
+	}
+
+	if _, err := GetUserByUsername(s, bot.Username); err == nil {
+		return nil, ErrUsernameExists{Username: bot.Username}
+	} else if !IsErrUserDoesNotExist(err) {
+		return nil, err
+	}
+
+	bot.ID = 0
+	bot.BotOwnerID = owner.ID
+	bot.Status = StatusActive
+	bot.Issuer = IssuerLocal
+	bot.Password = ""
+	bot.Email = ""
+	bot.AvatarProvider = config.DefaultSettingsAvatarProvider.GetString()
+	bot.AvatarFileID = config.DefaultSettingsAvatarFileID.GetInt64()
+	bot.EmailRemindersEnabled = false
+	bot.DiscoverableByName = false
+	bot.DiscoverableByEmail = false
+	bot.OverdueTasksRemindersEnabled = false
+	bot.OverdueTasksRemindersTime = config.DefaultSettingsOverdueTaskRemindersTime.GetString()
+	if bot.OverdueTasksRemindersTime == "" {
+		bot.OverdueTasksRemindersTime = "9:00"
+	}
+	bot.DefaultProjectID = 0
+	bot.WeekStart = config.DefaultSettingsWeekStart.GetInt()
+	bot.Timezone = config.DefaultSettingsTimezone.GetString()
+	if bot.Timezone == "" {
+		bot.Timezone = config.GetTimeZone().String()
+	}
+	if bot.Language == "" {
+		bot.Language = config.DefaultSettingsLanguage.GetString()
+	}
+
+	if _, err := s.Insert(bot); err != nil {
+		return nil, err
+	}
+
+	newBot, err := GetUserByID(s, bot.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	events.DispatchOnCommit(s, &CreatedEvent{User: newBot})
+	return newBot, nil
 }
 
 // HashPassword hashes a password
 func HashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), config.ServiceBcryptRounds.GetInt())
 	return string(bytes), err
+}
+
+// checkUsernameFormat validates username format rules shared by regular and bot users.
+func checkUsernameFormat(username string) error {
+	if username == "" {
+		return ErrNoUsernamePassword{}
+	}
+
+	if strings.Contains(username, " ") {
+		return &ErrUsernameMustNotContainSpaces{
+			Username: username,
+		}
+	}
+
+	// Check if username matches the reserved link-share pattern
+	linkSharePattern := regexp.MustCompile(`^link-share-\d+$`)
+	if linkSharePattern.MatchString(username) {
+		return ErrUsernameReserved{
+			Username: username,
+		}
+	}
+
+	return nil
 }
 
 func checkIfUserIsValid(user *User) error {
@@ -135,15 +234,12 @@ func checkIfUserIsValid(user *User) error {
 		return ErrNoUsernamePassword{}
 	}
 
-	if strings.Contains(user.Username, " ") {
-		return &ErrUsernameMustNotContainSpaces{
-			Username: user.Username,
-		}
+	if err := checkUsernameFormat(user.Username); err != nil {
+		return err
 	}
 
-	// Check if username matches the reserved link-share pattern
-	linkSharePattern := regexp.MustCompile(`^link-share-\d+$`)
-	if linkSharePattern.MatchString(user.Username) {
+	// Reserve the bot- prefix for bot users (created via CreateBotUser)
+	if strings.HasPrefix(user.Username, "bot-") {
 		return ErrUsernameReserved{
 			Username: user.Username,
 		}

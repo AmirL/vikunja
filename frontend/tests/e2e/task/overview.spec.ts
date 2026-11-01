@@ -94,7 +94,11 @@ test.describe('Home Page Task Overview', () => {
 
 		await page.goto(`/projects/${tasks[0].project_id}/1`)
 		await page.waitForLoadState('networkidle')
-		const taskResponsePromise = page.waitForResponse('**/api/v1/projects/*/tasks')
+		const taskResponsePromise = page.waitForResponse(response =>
+			response.url().includes('/api/v2/projects/') &&
+			response.url().includes('/tasks/bulk') &&
+			response.request().method() === 'POST',
+		)
 		await page.locator('.task-add textarea').fill(newTaskTitle)
 		await page.locator('.task-add textarea').press('Enter')
 		await taskResponsePromise
@@ -145,9 +149,9 @@ test.describe('Home Page Task Overview', () => {
 
 		// Wait for the task creation request to complete
 		const createTaskPromise = page.waitForResponse(response =>
-			response.url().includes('/projects/') &&
-			response.url().includes('/tasks') &&
-			response.request().method() === 'PUT',
+			response.url().includes('/api/v2/projects/') &&
+			response.url().includes('/tasks/bulk') &&
+			response.request().method() === 'POST',
 		)
 		await addTaskInput.press('Enter')
 		await createTaskPromise
@@ -157,7 +161,10 @@ test.describe('Home Page Task Overview', () => {
 	})
 
 	test('Should show the cta buttons for new project when there are no tasks', async ({authenticatedPage: page}) => {
-		await TaskFactory.truncate()
+		// Need a project so that ShowTasks renders (which sets tasksLoaded=true),
+		// but no tasks so the ImportHint becomes visible.
+		const project = (await ProjectFactory.create())[0]
+		await createDefaultViews(project.id)
 
 		await page.goto('/')
 

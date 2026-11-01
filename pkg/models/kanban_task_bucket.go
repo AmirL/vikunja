@@ -21,25 +21,26 @@ import (
 
 	"code.vikunja.io/api/pkg/db"
 	"code.vikunja.io/api/pkg/events"
-	"code.vikunja.io/api/pkg/user"
 	"code.vikunja.io/api/pkg/web"
+
 	"xorm.io/xorm"
+	"xorm.io/xorm/schemas"
 )
 
 // TaskBucket represents the relation between a task and a kanban bucket.
 // A task can only appear once per project view which is ensured by a
 // unique index on the combination of task_id and project_view_id.
 type TaskBucket struct {
-	BucketID int64   `xorm:"bigint not null index" json:"bucket_id" param:"bucket"`
-	Bucket   *Bucket `xorm:"-" json:"bucket"`
+	BucketID int64   `xorm:"bigint not null index" json:"bucket_id" param:"bucket" doc:"The bucket to move the task into. On /api/v2 this is taken from the URL; a value in the body is ignored."`
+	Bucket   *Bucket `xorm:"-" json:"bucket" readOnly:"true" doc:"The resolved target bucket, including its updated task count."`
 	// The task which belongs to the bucket. Together with ProjectViewID
 	// this field is part of a unique index to prevent duplicates.
-	TaskID int64 `xorm:"bigint not null index unique(task_view)" json:"task_id"`
+	TaskID int64 `xorm:"bigint not null index unique(task_view)" json:"task_id" doc:"The id of the task to place in the bucket."`
 	// The view this bucket belongs to. Combined with TaskID this forms a
 	// unique index.
-	ProjectViewID int64 `xorm:"bigint not null index unique(task_view)" json:"project_view_id" param:"view"`
+	ProjectViewID int64 `xorm:"bigint not null index unique(task_view)" json:"project_view_id" param:"view" doc:"The view the bucket belongs to. On /api/v2 this is taken from the URL; a value in the body is ignored."`
 	ProjectID     int64 `xorm:"-" json:"-" param:"project"`
-	Task          *Task `xorm:"-" json:"task"`
+	Task          *Task `xorm:"-" json:"task" readOnly:"true" doc:"The task as it stands after the move, reflecting any done-state change."`
 
 	web.Permissions `xorm:"-" json:"-"`
 	web.CRUDable    `xorm:"-" json:"-"`
@@ -55,31 +56,40 @@ func (b *TaskBucket) CanUpdate(s *xorm.Session, a web.Auth) (bool, error) {
 		ProjectID:     b.ProjectID,
 		ProjectViewID: b.ProjectViewID,
 	}
-	return bucket.canDoBucket(s, a)
+	view, err := bucket.getOwnView(s)
+	if err != nil {
+		return false, err
+	}
+	can, err := canWriteBucketProject(s, view.ProjectID, a)
+	if err != nil || !can {
+		return false, err
+	}
+
+	// The task comes from the request body and may live in a different
+	// project than the bucket, so it needs its own write check.
+	task := &Task{ID: b.TaskID}
+	can, err = task.CanWrite(s, a)
+	if err != nil || !can {
+		return false, err
+	}
+
+	return taskFitsView(s, a, view, b.TaskID)
 }
 
 func (b *TaskBucket) upsert(s *xorm.Session) (err error) {
-	count, err := s.Where("task_id = ? AND project_view_id = ?", b.TaskID, b.ProjectViewID).
-		Cols("bucket_id").
-		Update(b)
-	if err != nil {
-		return
+	// A native upsert moves the task in one atomic statement, without
+	// depending on the affected-row count (MySQL/MariaDB report 0 affected
+	// rows for an unchanged value).
+	onConflict := "ON CONFLICT (task_id, project_view_id) DO UPDATE SET bucket_id = excluded.bucket_id"
+	if db.Type() == schemas.MYSQL {
+		onConflict = "ON DUPLICATE KEY UPDATE bucket_id = VALUES(bucket_id)"
 	}
 
-	if count == 0 {
-		_, err = s.Insert(b)
-		if err != nil {
-			// Check if this is a unique constraint violation for the task_buckets table
-			if db.IsUniqueConstraintError(err, "UQE_task_buckets_task_project_view") {
-				return ErrTaskAlreadyExistsInBucket{
-					TaskID:        b.TaskID,
-					ProjectViewID: b.ProjectViewID,
-				}
-			}
-			return
-		}
-	}
-
+	// Raw SQL bypasses xorm's bean-based table-name handling, so qualify the
+	// table ourselves to honor a configured postgres schema (database.schema).
+	table := s.Engine().TableName(b, true)
+	query := "INSERT INTO " + table + " (task_id, project_view_id, bucket_id) VALUES (?, ?, ?) " + onConflict
+	_, err = s.Exec(query, b.TaskID, b.ProjectViewID, b.BucketID)
 	return
 }
 
@@ -125,7 +135,7 @@ func updateTaskBucket(s *xorm.Session, a web.Auth, b *TaskBucket) (err error) {
 	// Check the bucket limit
 	// Only check the bucket limit if the task is being moved between buckets, allow reordering the task within a bucket
 	if b.BucketID != 0 && b.BucketID != oldTaskBucket.BucketID {
-		taskCount, err := checkBucketLimit(s, a, task, bucket)
+		taskCount, err := checkBucketLimit(s, a, task, bucket, view, 0)
 		if err != nil {
 			return err
 		}
@@ -145,8 +155,19 @@ func updateTaskBucket(s *xorm.Session, a web.Auth, b *TaskBucket) (err error) {
 				oldTask := *task
 				oldTask.Done = false
 				updateDone(&oldTask, task)
-				updateBucket = false
-				b.BucketID = oldTaskBucket.BucketID
+				// A repeating task doesn't stay in the done bucket; route
+				// it back to the view's default bucket so the user sees
+				// the next iteration waiting in the "To-Do" column.
+				if view.DefaultBucketID != 0 {
+					b.BucketID = view.DefaultBucketID
+				} else {
+					b.BucketID = oldTaskBucket.BucketID
+				}
+				// The task is already in the correct bucket, so there is
+				// nothing to move and no count to bump.
+				if b.BucketID == oldTaskBucket.BucketID {
+					updateBucket = false
+				}
 			}
 		}
 
@@ -234,16 +255,18 @@ func updateTaskBucket(s *xorm.Session, a web.Auth, b *TaskBucket) (err error) {
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /projects/{project}/views/{view}/buckets/{bucket}/tasks [post]
 func (b *TaskBucket) Update(s *xorm.Session, a web.Auth) (err error) {
+	// Bound from the body; a no-op move would otherwise dispatch the client's task object.
+	b.Task = nil
+	b.Bucket = nil
 	err = updateTaskBucket(s, a, b)
 	if err != nil {
 		return err
 	}
 
 	if b.Task != nil {
-		doer, _ := user.GetFromAuth(a)
 		events.DispatchOnCommit(s, &TaskUpdatedEvent{
 			Task: b.Task,
-			Doer: doer,
+			Doer: doerFromAuth(s, a),
 		})
 	}
 	return nil

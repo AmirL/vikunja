@@ -5,7 +5,7 @@ import BaseButton from '@/components/base/BaseButton.vue'
 
 const configStore = useConfigStore()
 const hide = ref(false)
-const enabled = computed(() => configStore.demoModeEnabled && !hide.value)
+const enabled = computed(() => configStore.demo_mode_enabled && !hide.value)
 </script>
 
 <template>
@@ -18,6 +18,7 @@ const enabled = computed(() => configStore.demoModeEnabled && !hide.value)
 			<strong class="is-uppercase">{{ $t('demo.everythingWillBeDeleted') }}</strong>
 		</p>
 		<BaseButton
+			:aria-label="$t('misc.closeBanner')"
 			class="hide-button"
 			@click="() => hide = true"
 		>

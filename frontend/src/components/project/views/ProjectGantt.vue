@@ -2,30 +2,32 @@
 	<ProjectWrapper
 		class="project-gantt"
 		:is-loading-project="isLoadingProject"
-		:project-id="filters.projectId"
+		:project-id
 		:view-id
 	>
 		<template #default>
 			<Card :has-content="false">
 				<div class="gantt-options">
-					<FormField :label="$t('project.gantt.range')">
-						<Foo
-							id="range"
-							ref="flatPickerEl"
-							v-model="flatPickerDateRange"
-							:config="flatPickerConfig"
-							class="input"
-							:placeholder="$t('project.gantt.range')"
-						/>
+					<FormField
+						id="range"
+						:label="$t('misc.dateRange')"
+					>
+						<template #default="{ id }">
+							<DateRangeInput
+								:id="id"
+								v-model="dateRange"
+								:placeholder="$t('misc.dateRange')"
+							/>
+						</template>
 					</FormField>
 					<div
 						v-if="!hasDefaultFilters"
 						class="field"
 					>
-						<label
+						<span
 							class="label"
-							for="range"
-						>Reset</label>
+							aria-hidden="true"
+						>Reset</span>
 						<div class="control">
 							<XButton @click="setDefaultFilters">
 								Reset
@@ -66,15 +68,12 @@
 </template>
 
 <script setup lang="ts">
-import {computed, ref, toRefs} from 'vue'
-import type Flatpickr from 'flatpickr'
-import {useI18n} from 'vue-i18n'
+import {computed, toRefs} from 'vue'
 import type {RouteLocationNormalized} from 'vue-router'
 
-import {useBaseStore} from '@/stores/base'
-import {useFlatpickrLanguage} from '@/helpers/useFlatpickrLanguage'
+import {useCurrentProject} from '@/composables/useCurrentProject'
 
-import Foo from '@/components/misc/flatpickr/Flatpickr.vue'
+import DateRangeInput from '@/components/input/DateRangeInput.vue'
 import ProjectWrapper from '@/components/project/ProjectWrapper.vue'
 import FancyCheckbox from '@/components/input/FancyCheckbox.vue'
 import TaskForm from '@/components/tasks/TaskForm.vue'
@@ -85,36 +84,32 @@ import {useGanttFilters} from '../../../views/project/helpers/useGanttFilters'
 import {PERMISSIONS} from '@/constants/permissions'
 
 import type {DateISO} from '@/types/DateISO'
-import type {ITask} from '@/modelTypes/ITask'
-import type {IProjectView} from '@/modelTypes/IProjectView'
-import {useAutoRefresh} from '@/composables/useAutoRefresh'
-
-type Options = Flatpickr.Options.Options
+import type {Task as ITask} from '@/client/generated'
 
 const props = defineProps<{
 	isLoadingProject: boolean,
+	projectId: number,
 	route: RouteLocationNormalized
-	viewId: IProjectView['id']
+	viewId: number
 }>()
 
 
-const baseStore = useBaseStore()
-const canWrite = computed(() => baseStore.currentProject?.maxPermission > PERMISSIONS.READ)
+const {currentProject} = useCurrentProject()
+const canWrite = computed(() =>
+	typeof currentProject.value?.max_permission === 'number' &&
+	currentProject.value.max_permission > PERMISSIONS.READ,
+)
 
-const {route, viewId} = toRefs(props)
+const {route, projectId, viewId} = toRefs(props)
 const {
 	filters,
 	hasDefaultFilters,
 	setDefaultFilters,
 	tasks,
 	isLoading,
-	silentRefresh,
 	addTask,
 	updateTask,
-} = useGanttFilters(route, viewId)
-
-// Auto-refresh: silently poll for updates without visible reload
-useAutoRefresh(() => silentRefresh())
+} = useGanttFilters(route, projectId, viewId)
 
 const DEFAULT_DATE_RANGE_DAYS = 7
 
@@ -129,44 +124,28 @@ const defaultTaskEndDate: DateISO = new Date(new Date(
 async function addGanttTask(title: ITask['title']) {
 	return await addTask({
 		title,
-		projectId: filters.value.projectId,
-		startDate: defaultTaskStartDate,
-		endDate: defaultTaskEndDate,
+		project_id: filters.value.projectId,
+		start_date: defaultTaskStartDate,
+		end_date: defaultTaskEndDate,
 	})
 }
 
-const flatPickerEl = ref<typeof Foo | null>(null)
-const flatPickerDateRange = computed<Date[]>({
-	get: () => ([
-		new Date(filters.value.dateFrom),
-		new Date(filters.value.dateTo),
-	]),
-	set(newVal) {
-		const [dateFrom, dateTo] = newVal.map((date) => date?.toISOString())
-
-		// only set after whole range has been selected
-		if (!dateTo) return
-
-		Object.assign(filters.value, {dateFrom, dateTo})
+const dateRange = computed({
+	get: () => ({
+		start: new Date(filters.value.dateFrom),
+		end: new Date(filters.value.dateTo),
+	}),
+	set({start, end}: {start: Date, end: Date}) {
+		Object.assign(filters.value, {dateFrom: start.toISOString(), dateTo: end.toISOString()})
 	},
 })
-
-const initialDateRange = [filters.value.dateFrom, filters.value.dateTo]
-
-const {t} = useI18n({useScope: 'global'})
-const flatPickerConfig = computed(() => ({
-	altFormat: t('date.altFormatShort'),
-	altInput: true,
-	defaultDate: initialDateRange,
-	enableTime: false,
-	mode: 'range',
-	locale: useFlatpickrLanguage().value,
-} as Options))
 </script>
 
 <style lang="scss" scoped>
 .gantt-chart-container {
 	padding-block-end: 1rem;
+	position: relative;
+	z-index: 0;
 }
 
 .gantt-options {

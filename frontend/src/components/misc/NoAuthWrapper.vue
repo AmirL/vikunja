@@ -17,7 +17,11 @@
 					{{ $t("misc.welcomeBack") }}
 				</h2>
 			</section>
-			<section class="content">
+			<main
+				id="main-content"
+				tabindex="-1"
+				class="content"
+			>
 				<div>
 					<h2
 						v-if="title"
@@ -25,7 +29,7 @@
 					>
 						{{ title }}
 					</h2>
-					<ApiConfig v-if="showApiConfig" />
+					<ApiConfig v-if="shouldShowApiConfig" />
 					<Message
 						v-if="motd !== ''"
 						class="is-hidden-tablet mbe-4"
@@ -35,7 +39,7 @@
 					<slot />
 				</div>
 				<Legal />
-			</section>
+			</main>
 		</div>
 	</div>
 </template>
@@ -52,8 +56,9 @@ import ApiConfig from '@/components/misc/ApiConfig.vue'
 
 import { useTitle } from '@/composables/useTitle'
 import { useConfigStore } from '@/stores/config'
+import { isDesktopApp } from '@/helpers/desktopAuth'
 
-withDefaults(
+const props = withDefaults(
 	defineProps<{
 		showApiConfig?: boolean;
 	}>(),
@@ -61,6 +66,11 @@ withDefaults(
 		showApiConfig: false,
 	},
 )
+
+const isDesktop = isDesktopApp()
+const hasStoredApiUrl = isDesktop && localStorage.getItem('API_URL') !== null
+const shouldShowApiConfig = computed(() => props.showApiConfig && (!isDesktop || hasStoredApiUrl))
+
 const configStore = useConfigStore()
 const motd = computed(() => configStore.motd)
 
@@ -119,6 +129,8 @@ useTitle(() => title.value)
 			justify-content: space-between;
 		}
 
+		// Darken mainly the lower part of the photo where the white heading sits so
+		// the text keeps a reliable contrast ratio across the whole image.
 		&::before {
 			content: "";
 			position: absolute;
@@ -126,7 +138,12 @@ useTitle(() => title.value)
 			inset-inline-start: 0;
 			inset-inline-end: 0;
 			inset-block-end: 0;
-			background-color: rgba(0, 0, 0, 0.2);
+			background-image: linear-gradient(
+				to top,
+				rgba(0, 0, 0, 0.7) 0%,
+				rgba(0, 0, 0, 0.4) 35%,
+				rgba(0, 0, 0, 0.15) 100%
+			);
 		}
 
 		> * {

@@ -17,18 +17,32 @@
 package caldav
 
 import (
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"code.vikunja.io/api/pkg/log"
 	"code.vikunja.io/api/pkg/models"
+	"code.vikunja.io/api/pkg/richtext"
 	"code.vikunja.io/api/pkg/user"
 	"code.vikunja.io/api/pkg/utils"
 )
 
 // DateFormat is the caldav date format
 const DateFormat = `20060102T150405`
+
+// escapeICalText escapes a string for use inside an RFC 5545 §3.3.11 TEXT
+// property value. Backslash MUST be replaced first so the backslashes this
+// function inserts are not themselves re-escaped.
+func escapeICalText(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	s = strings.ReplaceAll(s, `;`, `\;`)
+	s = strings.ReplaceAll(s, `,`, `\,`)
+	return s
+}
 
 // Todo holds a single VTODO
 type Todo struct {
@@ -39,6 +53,7 @@ type Todo struct {
 	// Optional
 	Summary     string
 	Description string
+	Done        bool
 	Completed   time.Time
 	Organizer   *user.User
 	Priority    int64 // 0-9, 1 is highest
@@ -77,16 +92,25 @@ type Config struct {
 	Color  string
 }
 
+// getCaldavColor sanitizes color at the output boundary (non-hex chars
+// dropped) so upstream HexColor validation gaps cannot lead to iCal
+// property injection via CR/LF in a crafted color string.
 func getCaldavColor(color string) (caldavcolor string) {
+	color = strings.TrimPrefix(color, "#")
+
+	var b strings.Builder
+	b.Grow(len(color))
+	for _, r := range color {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+			b.WriteRune(r)
+		}
+	}
+	color = b.String()
 	if color == "" {
 		return ""
 	}
 
-	if !strings.HasPrefix(color, "#") {
-		color = "#" + color
-	}
-
-	color += "FF"
+	color = "#" + color + "FF"
 
 	return `
 X-APPLE-CALENDAR-COLOR:` + color + `
@@ -96,12 +120,14 @@ COLOR:` + color
 }
 
 func formatDuration(duration time.Duration) string {
-	seconds := duration.Seconds() - duration.Minutes()*60
-	minutes := duration.Minutes() - duration.Hours()*60
+	seconds := int64(duration.Seconds())
+	hours := seconds / 3600
+	minutes := (seconds % 3600) / 60
+	seconds %= 60
 
-	return strconv.FormatFloat(duration.Hours(), 'f', 0, 64) + `H` +
-		strconv.FormatFloat(minutes, 'f', 0, 64) + `M` +
-		strconv.FormatFloat(seconds, 'f', 0, 64) + `S`
+	return strconv.FormatInt(hours, 10) + `H` +
+		strconv.FormatInt(minutes, 10) + `M` +
+		strconv.FormatInt(seconds, 10) + `S`
 }
 
 func getRruleFromInterval(interval int64) (freq string, newInterval int64) {
@@ -131,7 +157,7 @@ func ParseTodos(config *Config, todos []*Todo) (caldavtodos string) {
 	caldavtodos = `BEGIN:VCALENDAR
 VERSION:2.0
 X-PUBLISHED-TTL:PT4H
-X-WR-CALNAME:` + config.Name + `
+X-WR-CALNAME:` + escapeICalText(config.Name) + `
 PRODID:-//` + config.ProdID + `//EN` + getCaldavColor(config.Color)
 
 	for _, t := range todos {
@@ -141,9 +167,9 @@ PRODID:-//` + config.ProdID + `//EN` + getCaldavColor(config.Color)
 
 		caldavtodos += `
 BEGIN:VTODO
-UID:` + t.UID + `
+UID:` + escapeICalText(t.UID) + `
 DTSTAMP:` + makeCalDavTimeFromTimeStamp(t.Timestamp) + `
-SUMMARY:` + t.Summary + getCaldavColor(t.Color)
+SUMMARY:` + escapeICalText(t.Summary) + getCaldavColor(t.Color)
 
 		if t.Start.Unix() > 0 {
 			caldavtodos += `
@@ -158,19 +184,35 @@ DURATION:PT` + formatDuration(t.Duration)
 DTEND:` + makeCalDavTimeFromTimeStamp(t.End)
 		}
 		if t.Description != "" {
-			re := regexp.MustCompile(`\r?\n`)
-			formattedDescription := re.ReplaceAllString(t.Description, "\\n")
-			caldavtodos += `
-DESCRIPTION:` + formattedDescription
+			// CalDAV clients show plain text, so emit markdown. On the near-impossible
+			// conversion error, log it and keep the stored value (GetContent can't
+			// return an error) rather than drop the description.
+			description, err := richtext.HTMLToMarkdown(t.Description)
+			if err != nil {
+				log.Errorf("[CALDAV] Failed to convert description to markdown for task %q: %v", t.UID, err)
+				description = t.Description
+			}
+			if description != "" {
+				caldavtodos += `
+DESCRIPTION:` + escapeICalText(description)
+			}
 		}
-		if t.Completed.Unix() > 0 {
+		// Keyed on Done, not Completed: a reopened repeating task keeps its done_at, and reporting
+		// it as completed makes clients echo it back as done, rescheduling it on every sync.
+		if t.Done {
+			if t.Completed.Unix() > 0 {
+				caldavtodos += `
+COMPLETED:` + makeCalDavTimeFromTimeStamp(t.Completed)
+			}
 			caldavtodos += `
-COMPLETED:` + makeCalDavTimeFromTimeStamp(t.Completed) + `
 STATUS:COMPLETED`
+		} else {
+			caldavtodos += `
+STATUS:NEEDS-ACTION`
 		}
 		if t.Organizer != nil {
 			caldavtodos += `
-ORGANIZER;CN=:` + t.Organizer.Username
+ORGANIZER;CN=:` + escapeICalText(t.Organizer.Username)
 		}
 
 		if t.DueDate.Unix() > 0 {
@@ -200,8 +242,12 @@ RRULE:FREQ=` + freq + `;INTERVAL=` + strconv.FormatInt(interval, 10)
 		}
 
 		if len(t.Categories) > 0 {
+			escapedCategories := make([]string, len(t.Categories))
+			for i, c := range t.Categories {
+				escapedCategories[i] = escapeICalText(c)
+			}
 			caldavtodos += `
-CATEGORIES:` + strings.Join(t.Categories, ",")
+CATEGORIES:` + strings.Join(escapedCategories, ",")
 		}
 
 		caldavtodos += `
@@ -239,7 +285,7 @@ TRIGGER;VALUE=DATE-TIME:` + makeCalDavTimeFromTimeStamp(a.Time)
 		}
 		caldavalarms += `
 ACTION:DISPLAY
-DESCRIPTION:` + a.Description + `
+DESCRIPTION:` + escapeICalText(a.Description) + `
 END:VALARM`
 	}
 	return caldavalarms
@@ -280,7 +326,7 @@ RELATED-TO;RELTYPE=CHILD:`
 RELATED-TO:`
 		}
 
-		caldavrelatedtos += r.UID
+		caldavrelatedtos += escapeICalText(r.UID)
 	}
 
 	return caldavrelatedtos

@@ -19,28 +19,31 @@ package models
 import (
 	"time"
 
+	"code.vikunja.io/api/pkg/config"
 	"code.vikunja.io/api/pkg/db"
 	"code.vikunja.io/api/pkg/events"
+	"code.vikunja.io/api/pkg/user"
 	"code.vikunja.io/api/pkg/web"
 
+	"xorm.io/builder"
 	"xorm.io/xorm"
 )
 
 // TeamProject defines the relation between a team and a project
 type TeamProject struct {
 	// The unique, numeric id of this project <-> team relation.
-	ID int64 `xorm:"bigint autoincr not null unique pk" json:"id"`
+	ID int64 `xorm:"bigint autoincr not null unique pk" json:"id" readOnly:"true" doc:"The unique, numeric id of this project <-> team relation."`
 	// The team id.
-	TeamID int64 `xorm:"bigint not null INDEX" json:"team_id" param:"team"`
+	TeamID int64 `xorm:"bigint not null INDEX" json:"team_id" param:"team" doc:"The id of the team that gets access to the project."`
 	// The project id.
 	ProjectID int64 `xorm:"bigint not null INDEX" json:"-" param:"project"`
 	// The permission this team has. 0 = Read only, 1 = Read & Write, 2 = Admin. See the docs for more details.
-	Permission Permission `xorm:"bigint INDEX not null default 0" json:"permission" valid:"length(0|2)" maximum:"2" default:"0"`
+	Permission Permission `xorm:"bigint INDEX not null default 0" json:"permission" valid:"length(0|2)" maximum:"2" default:"0" doc:"The permission this team has on the project: 0 = Read only, 1 = Read & Write, 2 = Admin."`
 
 	// A timestamp when this relation was created. You cannot change this value.
-	Created time.Time `xorm:"created not null" json:"created"`
+	Created time.Time `xorm:"created not null" json:"created" readOnly:"true" doc:"A timestamp when this relation was created. You cannot change this value."`
 	// A timestamp when this relation was last updated. You cannot change this value.
-	Updated time.Time `xorm:"updated not null" json:"updated"`
+	Updated time.Time `xorm:"updated not null" json:"updated" readOnly:"true" doc:"A timestamp when this relation was last updated. You cannot change this value."`
 
 	web.CRUDable    `xorm:"-" json:"-"`
 	web.Permissions `xorm:"-" json:"-"`
@@ -54,7 +57,20 @@ func (*TeamProject) TableName() string {
 // TeamWithPermission represents a team, combined with permissions.
 type TeamWithPermission struct {
 	Team       `xorm:"extends"`
-	Permission Permission `json:"permission"`
+	Permission Permission `json:"permission" readOnly:"true" doc:"The permission this team has on the project: 0 = Read only, 1 = Read & Write, 2 = Admin."`
+}
+
+func readableTeamSearchCond(a web.Auth) builder.Cond {
+	readableTeams := builder.In(
+		"teams.id",
+		builder.Select("team_id").
+			From("team_members").
+			Where(builder.Eq{"user_id": a.GetID()}),
+	)
+	if config.ServiceEnablePublicTeams.GetBool() {
+		return builder.Or(readableTeams, builder.Eq{"teams.is_public": true})
+	}
+	return readableTeams
 }
 
 // Create creates a new team <-> project relation
@@ -112,7 +128,7 @@ func (tl *TeamProject) Create(s *xorm.Session, a web.Auth) (err error) {
 	events.DispatchOnCommit(s, &ProjectSharedWithTeamEvent{
 		Project: l,
 		Team:    team,
-		Doer:    a,
+		Doer:    doerFromAuth(s, a),
 	})
 
 	err = updateProjectLastUpdated(s, l)
@@ -159,6 +175,15 @@ func (tl *TeamProject) Delete(s *xorm.Session, _ web.Auth) (err error) {
 		return err
 	}
 
+	memberIDs, err := teamMemberIDs(s, tl.TeamID)
+	if err != nil {
+		return err
+	}
+	err = cleanupAfterProjectAccessLossForUsers(s, memberIDs, []int64{tl.ProjectID})
+	if err != nil {
+		return err
+	}
+
 	err = updateProjectLastUpdated(s, &Project{ID: tl.ProjectID})
 	return
 }
@@ -179,6 +204,10 @@ func (tl *TeamProject) Delete(s *xorm.Session, _ web.Auth) (err error) {
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /projects/{id}/teams [get]
 func (tl *TeamProject) ReadAll(s *xorm.Session, a web.Auth, search string, page int, perPage int) (result interface{}, resultCount int, totalItems int64, err error) {
+	if _, is := a.(*LinkSharing); is {
+		return nil, 0, 0, &user.ErrMustNotBeLinkShare{}
+	}
+
 	// Check if the user can read the project
 	l := &Project{ID: tl.ProjectID}
 	canRead, _, err := l.CanRead(s, a)
@@ -198,6 +227,10 @@ func (tl *TeamProject) ReadAll(s *xorm.Session, a web.Auth, search string, page 
 		Join("INNER", "team_projects", "team_id = teams.id").
 		Where("team_projects.project_id = ?", tl.ProjectID).
 		Where(db.ILIKE("teams.name", search))
+	searchReadableTeamsOnly := search != "" && !isInstanceAdmin(s, a)
+	if searchReadableTeamsOnly {
+		query = query.Where(readableTeamSearchCond(a))
+	}
 	if limit > 0 {
 		query = query.Limit(limit, start)
 	}
@@ -206,9 +239,25 @@ func (tl *TeamProject) ReadAll(s *xorm.Session, a web.Auth, search string, page 
 		return nil, 0, 0, err
 	}
 
+	// Keep legacy relations visible while scrubbing unreadable team details.
 	teams := []*Team{}
 	for i := range all {
-		teams = append(teams, &all[i].Team)
+		canRead, _, readErr := all[i].CanRead(s, a)
+		if readErr != nil {
+			return nil, 0, 0, readErr
+		}
+		if !canRead && config.ServiceEnablePublicTeams.GetBool() {
+			canRead = all[i].IsPublic
+		}
+		if canRead {
+			teams = append(teams, &all[i].Team)
+			continue
+		}
+		permission := all[i].Permission
+		all[i] = &TeamWithPermission{
+			Team:       Team{ID: all[i].ID},
+			Permission: permission,
+		}
 	}
 
 	err = addMoreInfoToTeams(s, teams)
@@ -216,12 +265,15 @@ func (tl *TeamProject) ReadAll(s *xorm.Session, a web.Auth, search string, page 
 		return
 	}
 
-	totalItems, err = s.
+	countQuery := s.
 		Table("teams").
 		Join("INNER", "team_projects", "team_id = teams.id").
 		Where("team_projects.project_id = ?", tl.ProjectID).
-		Where("teams.name LIKE ?", "%"+search+"%").
-		Count(&TeamWithPermission{})
+		Where(db.ILIKE("teams.name", search))
+	if searchReadableTeamsOnly {
+		countQuery = countQuery.Where(readableTeamSearchCond(a))
+	}
+	totalItems, err = countQuery.Count(&TeamWithPermission{})
 	if err != nil {
 		return nil, 0, 0, err
 	}

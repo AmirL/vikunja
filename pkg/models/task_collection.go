@@ -32,22 +32,20 @@ type TaskCollection struct {
 	ProjectID     int64 `param:"project" json:"-"`
 	ProjectViewID int64 `param:"view" json:"-"`
 
-	Search string `query:"s" json:"s"`
+	Search string `query:"s" json:"s" doc:"A search term to match tasks by their title."`
 
 	// The query parameter to sort by. This is for ex. done, priority, etc.
-	SortBy    []string `query:"sort_by" json:"sort_by"`
-	SortByArr []string `query:"sort_by[]" json:"-"`
+	SortBy []string `query:"sort_by" json:"sort_by" doc:"The fields to sort by, for example done or priority. The special value relevance sorts by search relevance (most relevant first, requires s; ignored when the database cannot score the query)."`
 	// The query parameter to order the items by. This can be either asc or desc, with asc being the default.
-	OrderBy    []string `query:"order_by" json:"order_by"`
-	OrderByArr []string `query:"order_by[]" json:"-"`
+	OrderBy []string `query:"order_by" json:"order_by" doc:"The order for each sort_by field, either asc or desc. Defaults to asc."`
 
 	// The filter query to match tasks by. Check out https://vikunja.io/docs/filters for a full explanation.
-	Filter string `query:"filter" json:"filter"`
+	Filter string `query:"filter" json:"filter" doc:"The filter query to match tasks by, e.g. \"done = false && due_date < now+7d\". Combine conditions with && or || (not and/or) and group them with parentheses. Operators: =, !=, >, >=, <, <=, like, in, not in. See https://vikunja.io/docs/filters."`
 	// The time zone which should be used for date match (statements like "now" resolve to different actual times)
 	FilterTimezone string `query:"filter_timezone" json:"-"`
 
 	// If set to true, the result will also include null values
-	FilterIncludeNulls bool `query:"filter_include_nulls" json:"filter_include_nulls"`
+	FilterIncludeNulls bool `query:"filter_include_nulls" json:"filter_include_nulls" doc:"If true, the result also includes tasks whose filtered field is null."`
 
 	// If set to `subtasks`, Vikunja will fetch only tasks which do not have subtasks and then in a
 	// second step, will fetch all of these subtasks. This may result in more tasks than the
@@ -56,10 +54,18 @@ type TaskCollection struct {
 	// If set to `reactions`, the reactions of each task will be present in the response.
 	// If set to `comments`, the first 50 comments of each task will be present in the response.
 	// You can set this multiple times with different values.
-	Expand    []TaskCollectionExpandable `query:"expand" json:"-"`
-	ExpandArr []TaskCollectionExpandable `query:"expand[]" json:"-"`
+	Expand []TaskCollectionExpandable `query:"expand" json:"-"`
 
 	isSavedFilter bool
+	// Request filter on a saved filter which includes nulls. Kept apart so
+	// include-nulls doesn't leak into the saved filter's own conditions.
+	nullableFilter string
+
+	// forceFlatTasks makes ReadAll always return []*Task, never []*Bucket, even
+	// for a kanban view. v1's single tasks endpoint is polymorphic; v2 splits it
+	// into a flat-tasks endpoint and a separate buckets-with-tasks one, and the
+	// former sets this so a kanban view path still yields tasks.
+	forceFlatTasks bool
 
 	web.CRUDable    `xorm:"-" json:"-"`
 	web.Permissions `xorm:"-" json:"-"`
@@ -72,6 +78,7 @@ const TaskCollectionExpandBuckets TaskCollectionExpandable = `buckets`
 const TaskCollectionExpandReactions TaskCollectionExpandable = `reactions`
 const TaskCollectionExpandComments TaskCollectionExpandable = `comments`
 const TaskCollectionExpandCommentCount TaskCollectionExpandable = `comment_count`
+const TaskCollectionExpandTimeEntriesCount TaskCollectionExpandable = `time_entries_count`
 const TaskCollectionExpandIsUnread TaskCollectionExpandable = `is_unread`
 
 // Validate validates if the TaskCollectionExpandable value is valid.
@@ -87,11 +94,13 @@ func (t TaskCollectionExpandable) Validate() error {
 		return nil
 	case TaskCollectionExpandCommentCount:
 		return nil
+	case TaskCollectionExpandTimeEntriesCount:
+		return nil
 	case TaskCollectionExpandIsUnread:
 		return nil
 	}
 
-	return InvalidFieldErrorWithMessage([]string{"expand"}, "Expand must be one of the following values: subtasks, buckets, reactions, comments, comment_count, is_unread")
+	return InvalidFieldErrorWithMessage([]string{"expand"}, "Expand must be one of the following values: subtasks, buckets, reactions, comments, comment_count, time_entries_count, is_unread")
 }
 
 func validateTaskField(fieldName string) error {
@@ -99,7 +108,8 @@ func validateTaskField(fieldName string) error {
 	case
 		taskPropertyAssignees,
 		taskPropertyLabels,
-		taskPropertyReminders:
+		taskPropertyReminders,
+		taskPropertyCreatedBy:
 		return nil
 	}
 
@@ -107,18 +117,6 @@ func validateTaskField(fieldName string) error {
 }
 
 func getTaskFilterOptsFromCollection(tf *TaskCollection, projectView *ProjectView) (opts *taskSearchOptions, err error) {
-	if len(tf.SortByArr) > 0 {
-		tf.SortBy = append(tf.SortBy, tf.SortByArr...)
-	}
-
-	if len(tf.OrderByArr) > 0 {
-		tf.OrderBy = append(tf.OrderBy, tf.OrderByArr...)
-	}
-
-	if len(tf.ExpandArr) > 0 {
-		tf.Expand = append(tf.Expand, tf.ExpandArr...)
-	}
-
 	var sort = make([]*sortParam, 0, len(tf.SortBy))
 	for i, s := range tf.SortBy {
 		param := &sortParam{
@@ -148,6 +146,7 @@ func getTaskFilterOptsFromCollection(tf *TaskCollection, projectView *ProjectVie
 
 	opts = &taskSearchOptions{
 		sortby:             sort,
+		userProvidedSort:   len(tf.SortBy) > 0,
 		filterIncludeNulls: tf.FilterIncludeNulls,
 		filter:             tf.Filter,
 		filterTimezone:     tf.FilterTimezone,
@@ -158,11 +157,53 @@ func getTaskFilterOptsFromCollection(tf *TaskCollection, projectView *ProjectVie
 	}
 
 	opts.parsedFilters, err = getTaskFiltersFromFilterString(tf.Filter, tf.FilterTimezone)
-	return opts, err
+	if err != nil || tf.nullableFilter == "" {
+		return opts, err
+	}
+
+	nullable, err := getTaskFiltersFromFilterString(tf.nullableFilter, tf.FilterTimezone)
+	if err != nil {
+		return nil, err
+	}
+	groups := []*taskFilter{{value: nullable, join: filterConcatAnd, includeNulls: true}}
+	if len(opts.parsedFilters) > 0 {
+		groups = append(groups, &taskFilter{value: opts.parsedFilters, join: filterConcatAnd})
+		opts.filter = "(" + tf.nullableFilter + ") && (" + tf.Filter + ")"
+	} else {
+		opts.filter = tf.nullableFilter
+	}
+	opts.parsedFilters = groups
+	return opts, nil
 }
 
-func getTaskOrTasksInBuckets(s *xorm.Session, a web.Auth, projects []*Project, view *ProjectView, opts *taskSearchOptions, filteringForBucket bool) (tasks interface{}, resultCount int, totalItems int64, err error) {
-	if filteringForBucket {
+func (tf *TaskCollection) mergeRequestFilter(request *TaskCollection) {
+	switch {
+	case request.Filter == "":
+	case tf.Filter == "":
+		tf.Filter = request.Filter
+		tf.FilterIncludeNulls = tf.FilterIncludeNulls || request.FilterIncludeNulls
+	case request.FilterIncludeNulls && !tf.FilterIncludeNulls:
+		tf.nullableFilter = request.Filter
+	default:
+		tf.Filter = "(" + request.Filter + ") && (" + tf.Filter + ")"
+	}
+}
+
+// SetForceFlatTasks makes ReadAll return a flat []*Task even for a kanban view.
+// The v2 tasks endpoint uses it; v1 leaves it unset for the polymorphic shape.
+func (tf *TaskCollection) SetForceFlatTasks() {
+	tf.forceFlatTasks = true
+}
+
+func getTaskOrTasksInBuckets(s *xorm.Session, a web.Auth, projects []*Project, view *ProjectView, opts *taskSearchOptions, filteringForBucket, forceFlatTasks bool) (tasks interface{}, resultCount int, totalItems int64, err error) {
+	if view != nil && GetSavedFilterIDFromProjectID(view.ProjectID) > 0 {
+		err = ensureTaskPositionsForSavedFilterView(s, a, projects, view, opts)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+	}
+
+	if filteringForBucket || forceFlatTasks {
 		return getTasksForProjects(s, projects, a, opts, view)
 	}
 
@@ -241,7 +282,7 @@ func getFilterValueForBucketFilter(filter string, view *ProjectView) (newFilter 
 // @Param page query int false "The page number. Used for pagination. If not provided, the first page of results is returned."
 // @Param per_page query int false "The maximum number of items per page. Note this parameter is limited by the configured maximum of items per page."
 // @Param s query string false "Search tasks by task text."
-// @Param sort_by query string false "The sorting parameter. You can pass this multiple times to get the tasks ordered by multiple different parametes, along with `order_by`. Possible values to sort by are `id`, `title`, `description`, `done`, `done_at`, `due_date`, `created_by_id`, `project_id`, `repeat_after`, `priority`, `start_date`, `end_date`, `hex_color`, `percent_done`, `uid`, `created`, `updated`. Default is `id`."
+// @Param sort_by query string false "The sorting parameter. You can pass this multiple times to get the tasks ordered by multiple different parametes, along with `order_by`. Possible values to sort by are `id`, `title`, `description`, `done`, `done_at`, `due_date`, `created_by_id`, `project_id`, `repeat_after`, `priority`, `start_date`, `end_date`, `hex_color`, `percent_done`, `uid`, `created`, `updated`, `relevance`. `relevance` sorts by search relevance (most relevant first, requires `s`; ignored when the database cannot score the query). Default is `id`."
 // @Param order_by query string false "The ordering parameter. Possible values to order by are `asc` or `desc`. Default is `asc`."
 // @Param filter query string false "The filter query to match tasks by. Check out https://vikunja.io/docs/filters for a full explanation of the feature."
 // @Param filter_timezone query string false "The time zone which should be used for date match (statements like "now" resolve to different actual times)"
@@ -252,6 +293,8 @@ func getFilterValueForBucketFilter(filter string, view *ProjectView) (newFilter 
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /projects/{id}/views/{view}/tasks [get]
 func (tf *TaskCollection) ReadAll(s *xorm.Session, a web.Auth, search string, page int, perPage int) (result interface{}, resultCount int, totalItems int64, err error) {
+
+	tf.pinToLinkShareProject(a)
 
 	// If the project id is < -1 this means we're dealing with a saved filter - in that case we get and populate the filter
 	// -1 is the favorites project which works as intended
@@ -272,18 +315,12 @@ func (tf *TaskCollection) ReadAll(s *xorm.Session, a web.Auth, search string, pa
 		// By prepending sort options before the saved ones from the filter, we make sure the supplied sort
 		// options via query take precedence over the rest.
 
-		sortby := append(tf.SortBy, tf.SortByArr...)
-		sortby = append(sortby, sf.Filters.SortBy...)
-		sortby = append(sortby, sf.Filters.SortByArr...)
+		sortby := append(tf.SortBy, sf.Filters.SortBy...)
 
-		orderby := append(tf.OrderBy, tf.OrderByArr...)
-		orderby = append(orderby, sf.Filters.OrderBy...)
-		orderby = append(orderby, sf.Filters.OrderByArr...)
+		orderby := append(tf.OrderBy, sf.Filters.OrderBy...)
 
 		sf.Filters.SortBy = sortby
-		sf.Filters.SortByArr = nil
 		sf.Filters.OrderBy = orderby
-		sf.Filters.OrderByArr = nil
 
 		if sf.Filters.FilterTimezone == "" {
 			u, err := user.GetUserByID(s, a.GetID())
@@ -297,16 +334,10 @@ func (tf *TaskCollection) ReadAll(s *xorm.Session, a web.Auth, search string, pa
 		tc.ProjectViewID = tf.ProjectViewID
 		tc.ProjectID = tf.ProjectID
 		tc.isSavedFilter = true
-		tc.Expand = append(tf.Expand, tf.ExpandArr...)
-		tc.ExpandArr = nil
+		tc.Expand = tf.Expand
+		tc.forceFlatTasks = tf.forceFlatTasks
 
-		if tf.Filter != "" {
-			if tc.Filter != "" {
-				tc.Filter = "(" + tf.Filter + ") && (" + tc.Filter + ")"
-			} else {
-				tc.Filter = tf.Filter
-			}
-		}
+		tc.mergeRequestFilter(tf)
 
 		return tc.ReadAll(s, a, search, page, perPage)
 	}
@@ -334,6 +365,10 @@ func (tf *TaskCollection) ReadAll(s *xorm.Session, a web.Auth, search string, pa
 
 			if view.Filter.Search != "" {
 				search = view.Filter.Search
+			}
+
+			if view.Filter.FilterIncludeNulls {
+				tf.FilterIncludeNulls = true
 			}
 		}
 
@@ -387,7 +422,7 @@ func (tf *TaskCollection) ReadAll(s *xorm.Session, a web.Auth, search string, pa
 		if err != nil {
 			return nil, 0, 0, err
 		}
-		return getTaskOrTasksInBuckets(s, a, []*Project{project}, view, opts, filteringForBucket)
+		return getTaskOrTasksInBuckets(s, a, []*Project{project}, view, opts, filteringForBucket, tf.forceFlatTasks)
 	}
 
 	projects, err := getRelevantProjectsFromCollection(s, a, tf)
@@ -395,5 +430,13 @@ func (tf *TaskCollection) ReadAll(s *xorm.Session, a web.Auth, search string, pa
 		return nil, 0, 0, err
 	}
 
-	return getTaskOrTasksInBuckets(s, a, projects, view, opts, filteringForBucket)
+	return getTaskOrTasksInBuckets(s, a, projects, view, opts, filteringForBucket, tf.forceFlatTasks)
+}
+
+// pinToLinkShareProject forces the requested project to the link share's own
+// project so a foreign view (and its buckets) can never resolve (GHSA-rj9j).
+func (tf *TaskCollection) pinToLinkShareProject(a web.Auth) {
+	if shareAuth, is := a.(*LinkSharing); is {
+		tf.ProjectID = shareAuth.ProjectID
+	}
 }

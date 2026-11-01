@@ -1,24 +1,30 @@
-import {ref, computed, readonly} from 'vue'
+import {computed, readonly, ref, watch} from 'vue'
 import {useI18n} from 'vue-i18n'
 import {defineStore, acceptHMRUpdate} from 'pinia'
+import {useQuery} from '@tanstack/vue-query'
 
-import {getBlobFromBlurHash} from '@/helpers/getBlobFromBlurHash'
-
-import ProjectModel from '@/models/project'
-import ProjectService from '@/services/project'
-import {checkAndSetApiUrl, ERROR_NO_API_URL, InvalidApiUrlProvidedError, NoApiUrlProvidedError} from '@/helpers/checkAndSetApiUrl'
+import {checkAndSetApiUrl, ERROR_NO_API_URL} from '@/helpers/checkAndSetApiUrl'
+import {InvalidApiUrlProvidedError, NoApiUrlProvidedError} from '@/helpers/apiUrl'
+import {isDesktopApp} from '@/helpers/desktopAuth'
+import type {QuickAddPrefill} from '@/helpers/quickAddPrefill'
 
 import {useMenuActive} from '@/composables/useMenuActive'
 
 import {useAuthStore} from '@/stores/auth'
 import router from '@/router'
-import type {IProject} from '@/modelTypes/IProject'
-import type {Permission} from '@/constants/permissions'
-import type {IProjectView} from '@/modelTypes/IProjectView'
+import {queryClient} from '@/client/queryClient'
+import {projectQuery, type ProjectResponse} from '@/client/queries/projects'
+import {useProjectBackground} from '@/composables/useProjectBackground'
+
+export const ERROR_RATE_LIMITED = 'rateLimited'
+
+function isRateLimited(e: unknown) {
+	return (e as {cause?: {status?: number}} | undefined)?.cause?.status === 429
+}
 
 export const useBaseStore = defineStore('base', () => {
 	const authStore = useAuthStore()
-	
+
 	const {t} = useI18n()
 
 	const ready = ref(false)
@@ -26,47 +32,39 @@ export const useBaseStore = defineStore('base', () => {
 	const loading = computed(() => !ready.value && error.value === '')
 
 	// This is used to highlight the current project in menu for all project related views
-	const currentProject = ref<IProject | null>(new ProjectModel({
-		id: 0,
-		isArchived: false,
-	}))
-	const currentProjectViewId = ref<IProjectView['id'] | undefined>(undefined)
-	const background = ref('')
-	const blurHash = ref('')
+	const currentProjectId = ref(0)
+	const currentProjectViewId = ref<number | undefined>(undefined)
+
+	// Pseudo projects (favorites, saved filters) have no detail endpoint and no background.
+	const currentProjectQuery = useQuery(computed(() => ({
+		...projectQuery(currentProjectId.value),
+		enabled: currentProjectId.value > 0,
+	})), queryClient)
+	const currentProject = computed(() => currentProjectQuery.data.value ?? null)
+	const {background: backgroundUrl, blurHashUrl} = useProjectBackground(currentProject)
+	const background = computed(() => backgroundUrl.value ?? '')
+	const blurHash = computed(() => blurHashUrl.value ?? '')
 
 	const hasTasks = ref(false)
 	const keyboardShortcutsActive = ref(false)
 	const quickActionsActive = ref(false)
+	const quickAddPrefill = ref<QuickAddPrefill | null>(null)
 	const logoVisible = ref(true)
 	const updateAvailable = ref(false)
 
-	function setCurrentProject(newCurrentProject: IProject | null, currentViewId?: IProjectView['id']) {
-		// Server updates don't return the permission. Therefore, the permission is reset after updating the project which is
-		// confusing because all the buttons will disappear in that case. To prevent this, we're keeping the permission
-		// when updating the project in global state.
-		let maxPermission: Permission | null = newCurrentProject?.maxPermission || null
-		if (
-			typeof currentProject.value?.maxPermission !== 'undefined' &&
-			newCurrentProject !== null &&
-			(
-				typeof newCurrentProject.maxPermission === 'undefined' ||
-				newCurrentProject.maxPermission === null
-			)
-		) {
-			maxPermission = currentProject.value.maxPermission
-		}
-		if (newCurrentProject === null) {
-			currentProject.value = null
-			return
-		}
-		currentProject.value = {
-			...newCurrentProject,
-			maxPermission,
-		}
-		setCurrentProjectViewId(currentViewId)
+	function setCurrentProject(project: Pick<ProjectResponse, 'id'> | null, viewId?: number) {
+		currentProjectId.value = project?.id ?? 0
+		setCurrentProjectViewId(viewId)
 	}
-	
-	function setCurrentProjectViewId(viewId?: IProjectView['id']) {
+
+	// A task opened over its kanban board must keep that board's view id.
+	function setCurrentProjectIfNotSet(project: Pick<ProjectResponse, 'id'>) {
+		if (currentProjectId.value !== project.id) {
+			setCurrentProject(project)
+		}
+	}
+
+	function setCurrentProjectViewId(viewId?: number) {
 		currentProjectViewId.value = viewId
 	}
 
@@ -78,17 +76,16 @@ export const useBaseStore = defineStore('base', () => {
 		keyboardShortcutsActive.value = value
 	}
 
-	function setQuickActionsActive(value: boolean) {
+	function setQuickActionsActive(value: boolean, prefill: QuickAddPrefill | null = null) {
 		quickActionsActive.value = value
+		quickAddPrefill.value = value ? prefill : null
 	}
 
-	function setBackground(newBackground: string) {
-		background.value = newBackground
-	}
-
-	function setBlurHash(newBlurHash: string) {
-		blurHash.value = newBlurHash
-	}
+	// SPA logout keeps this store alive, so reset on identity change.
+	watch(() => authStore.identityKey, () => {
+		setCurrentProject(null)
+		setHasTasks(false)
+	}, {flush: 'sync'})
 
 	function setLogoVisible(visible: boolean) {
 		logoVisible.value = visible
@@ -98,58 +95,22 @@ export const useBaseStore = defineStore('base', () => {
 		updateAvailable.value = value
 	}
 
-	async function handleSetCurrentProject(
-		{project, forceUpdate = false, currentProjectViewId = undefined}: {project: IProject | null, forceUpdate?: boolean, currentProjectViewId?: IProjectView['id']},
-	) {
-		if (project === null || typeof project === 'undefined') {
-			setCurrentProject(null)
-			setBackground('')
-			setBlurHash('')
-			return
-		}
-
-		// The forceUpdate parameter is used only when updating a project background directly because in that case 
-		// the current project stays the same, but we want to show the new background right away.
-		if (project.id !== currentProject.value?.id || forceUpdate) {
-			if (project.backgroundInformation) {
-				try {
-					const blurHash = await getBlobFromBlurHash(project.backgroundBlurHash)
-					if (blurHash) {
-						setBlurHash(window.URL.createObjectURL(blurHash))
-					}
-
-					const projectService = new ProjectService()
-					const background = await projectService.background(project)
-					setBackground(background)
-				} catch (e) {
-					console.error('Error getting background image for project', project.id, e)
-				}
-			}
-		}
-
-		if (
-			typeof project.backgroundInformation === 'undefined' ||
-			project.backgroundInformation === null
-		) {
-			setBackground('')
-			setBlurHash('')
-		}
-
-		setCurrentProject(project, currentProjectViewId)
-	}
-
-	async function handleSetCurrentProjectIfNotSet(project: IProject) {
-		if (currentProject.value?.id !== project.id) {
-			await handleSetCurrentProject({project})
-		}
-	}
-
-	async function loadApp() {
+	async function hydrateConfig() {
 		try {
+			if (isDesktopApp()) {
+				// On desktop, ignore the default window.API_URL (set by index.html)
+				// and only use a previously stored API URL from localStorage.
+				const storedApiUrl = localStorage.getItem('API_URL')
+				if (storedApiUrl) {
+					// Hydrate /info before marking ready; otherwise pro-feature gates stay off for returning desktop users.
+					await checkAndSetApiUrl(storedApiUrl)
+					await authStore.checkAuth()
+				}
+				return
+			}
+
 			await checkAndSetApiUrl(window.API_URL)
 			await authStore.checkAuth()
-			await router.isReady()
-			ready.value = true
 		} catch (e: unknown) {
 			if (e instanceof NoApiUrlProvidedError) {
 				error.value = ERROR_NO_API_URL
@@ -159,40 +120,58 @@ export const useBaseStore = defineStore('base', () => {
 				error.value = t('apiConfig.error')
 				return
 			}
-			error.value = String(e.message)
+			if (isRateLimited(e)) {
+				error.value = ERROR_RATE_LIMITED
+				return
+			}
+			error.value = String(e instanceof Error ? e.message : e)
 		}
 	}
 
-	loadApp()
+	// Exposed so router guards can await config/auth hydration on direct
+	// navigation without deadlocking on router.isReady().
+	const appReady = hydrateConfig()
+
+	async function loadApp() {
+		// Re-hydrates (used when the user selects a new API URL from Ready.vue).
+		await hydrateConfig()
+		await router.isReady()
+		ready.value = true
+	}
+
+	// Initial load: wait on the in-flight hydration, then mark ready once
+	// the router has settled.
+	appReady.then(async () => {
+		await router.isReady()
+		ready.value = true
+	})
 
 	return {
 		error: readonly(error),
 		loading: readonly(loading),
 		ready: readonly(ready),
 		loadApp,
+		appReady,
 
-		currentProject: readonly(currentProject),
+		currentProjectId: readonly(currentProjectId),
 		currentProjectViewId: readonly(currentProjectViewId),
 		background: readonly(background),
 		blurHash: readonly(blurHash),
 		hasTasks: readonly(hasTasks),
 		keyboardShortcutsActive: readonly(keyboardShortcutsActive),
 		quickActionsActive: readonly(quickActionsActive),
+		quickAddPrefill: readonly(quickAddPrefill),
 		logoVisible: readonly(logoVisible),
 		updateAvailable: readonly(updateAvailable),
 
 		setCurrentProject,
+		setCurrentProjectIfNotSet,
 		setCurrentProjectViewId,
 		setHasTasks,
 		setKeyboardShortcutsActive,
 		setQuickActionsActive,
-		setBackground,
-		setBlurHash,
 		setLogoVisible,
 		setUpdateAvailable,
-
-		handleSetCurrentProject,
-		handleSetCurrentProjectIfNotSet,
 
 		...useMenuActive(),
 	}

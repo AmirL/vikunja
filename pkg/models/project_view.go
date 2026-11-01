@@ -19,11 +19,17 @@ package models
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
+	"code.vikunja.io/api/pkg/db"
+	"code.vikunja.io/api/pkg/user"
 	"code.vikunja.io/api/pkg/web"
 
+	"github.com/danielgtaylor/huma/v2"
+	"xorm.io/builder"
 	"xorm.io/xorm"
+	"xorm.io/xorm/schemas"
 )
 
 type ProjectViewKind int
@@ -64,6 +70,17 @@ func (p *ProjectViewKind) UnmarshalJSON(bytes []byte) error {
 	}
 
 	return nil
+}
+
+// Schema lets Huma (/api/v2) reflect this type as a string enum. The custom
+// Marshal/UnmarshalJSON above serialize it as a string, but the underlying Go
+// type is an int — without this, Huma would generate an integer schema and
+// reject the string form clients actually send.
+func (*ProjectViewKind) Schema(_ huma.Registry) *huma.Schema {
+	return &huma.Schema{
+		Type: "string",
+		Enum: []any{"list", "gantt", "table", "kanban"},
+	}
 }
 
 // NOTE: When adding or changing enum values for ProjectViewKind,
@@ -123,39 +140,48 @@ func (p *BucketConfigurationModeKind) UnmarshalJSON(bytes []byte) error {
 	return nil
 }
 
+// Schema lets Huma (/api/v2) reflect this type as a string enum; see the note
+// on ProjectViewKind.Schema for why this is needed.
+func (*BucketConfigurationModeKind) Schema(_ huma.Registry) *huma.Schema {
+	return &huma.Schema{
+		Type: "string",
+		Enum: []any{"none", "manual", "filter"},
+	}
+}
+
 type ProjectViewBucketConfiguration struct {
-	Title  string          `json:"title"`
-	Filter *TaskCollection `json:"filter"`
+	Title  string          `json:"title" doc:"The title of the bucket this configuration creates."`
+	Filter *TaskCollection `json:"filter" doc:"The filter query that decides which tasks land in this bucket. Combine conditions with && or || (not and/or) and group them with parentheses. Operators: =, !=, >, >=, <, <=, like, in, not in. See https://vikunja.io/docs/filters."`
 }
 
 type ProjectView struct {
 	// The unique numeric id of this view
-	ID int64 `xorm:"autoincr not null unique pk" json:"id" param:"view"`
+	ID int64 `xorm:"autoincr not null unique pk" json:"id" param:"view" readOnly:"true" doc:"The unique, numeric id of this view. Set by the server."`
 	// The title of this view
-	Title string `xorm:"varchar(255) not null" json:"title" valid:"required,runelength(1|250)"`
+	Title string `xorm:"varchar(255) not null" json:"title" valid:"required,runelength(1|250)" minLength:"1" maxLength:"250" doc:"The title of this view."`
 	// The project this view belongs to
-	ProjectID int64 `xorm:"not null index" json:"project_id" param:"project"`
+	ProjectID int64 `xorm:"not null index" json:"project_id" param:"project" readOnly:"true" doc:"The project this view belongs to. Taken from the URL path; ignored on write."`
 	// The kind of this view. Can be `list`, `gantt`, `table` or `kanban`.
-	ViewKind ProjectViewKind `xorm:"not null" json:"view_kind" swaggertype:"string" enums:"list,gantt,table,kanban"`
+	ViewKind ProjectViewKind `xorm:"not null" json:"view_kind" swaggertype:"string" enums:"list,gantt,table,kanban" doc:"The kind of this view. One of list, gantt, table or kanban."`
 
 	// The filter query to match tasks by. Check out https://vikunja.io/docs/filters for a full explanation.
-	Filter *TaskCollection `xorm:"json null default null" query:"filter" json:"filter"`
+	Filter *TaskCollection `xorm:"json null default null" query:"filter" json:"filter" doc:"The filter query used to match tasks shown in this view. Combine conditions with && or || (not and/or) and group them with parentheses. Operators: =, !=, >, >=, <, <=, like, in, not in. See https://vikunja.io/docs/filters."`
 	// The position of this view in the list. The list of all views will be sorted by this parameter.
-	Position float64 `xorm:"double null" json:"position"`
+	Position float64 `xorm:"double null" json:"position" doc:"The position of this view in the project's list of views. Views are sorted ascending by this value."`
 
 	// The bucket configuration mode. Can be `none`, `manual` or `filter`. `manual` allows to move tasks between buckets as you normally would. `filter` creates buckets based on a filter for each bucket.
-	BucketConfigurationMode BucketConfigurationModeKind `xorm:"default 0" json:"bucket_configuration_mode" swaggertype:"string" enums:"none,manual,filter,manual"`
+	BucketConfigurationMode BucketConfigurationModeKind `xorm:"default 0" json:"bucket_configuration_mode" swaggertype:"string" enums:"none,manual,filter" doc:"The bucket configuration mode. One of none, manual or filter. manual lets you move tasks between buckets; filter creates a bucket per filter."`
 	// When the bucket configuration mode is not `manual`, this field holds the options of that configuration.
-	BucketConfiguration []*ProjectViewBucketConfiguration `xorm:"json" json:"bucket_configuration"`
+	BucketConfiguration []*ProjectViewBucketConfiguration `xorm:"json" json:"bucket_configuration" doc:"When the bucket configuration mode is filter, holds the title and filter of each bucket."`
 	// The ID of the bucket where new tasks without a bucket are added to. By default, this is the leftmost bucket in a view.
-	DefaultBucketID int64 `xorm:"bigint INDEX null" json:"default_bucket_id"`
+	DefaultBucketID int64 `xorm:"bigint INDEX null" json:"default_bucket_id" doc:"The id of the bucket new tasks without a bucket are added to. Defaults to the leftmost bucket."`
 	// If tasks are moved to the done bucket, they are marked as done. If they are marked as done individually, they are moved into the done bucket.
-	DoneBucketID int64 `xorm:"bigint INDEX null" json:"done_bucket_id"`
+	DoneBucketID int64 `xorm:"bigint INDEX null" json:"done_bucket_id" doc:"The id of the done bucket. Tasks moved here are marked done, and tasks marked done are moved here."`
 
 	// A timestamp when this view was updated. You cannot change this value.
-	Updated time.Time `xorm:"updated not null" json:"updated"`
+	Updated time.Time `xorm:"updated not null" json:"updated" readOnly:"true" doc:"A timestamp when this view was last updated. You cannot change this value."`
 	// A timestamp when this reaction was created. You cannot change this value.
-	Created time.Time `xorm:"created not null" json:"created"`
+	Created time.Time `xorm:"created not null" json:"created" readOnly:"true" doc:"A timestamp when this view was created. You cannot change this value."`
 
 	web.CRUDable    `xorm:"-" json:"-"`
 	web.Permissions `xorm:"-" json:"-"`
@@ -248,6 +274,13 @@ func (pv *ProjectView) ReadOne(s *xorm.Session, _ web.Auth) (err error) {
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /projects/{project}/views/{id} [delete]
 func (pv *ProjectView) Delete(s *xorm.Session, _ web.Auth) (err error) {
+	// Resolve the view under the path project first: the buckets/positions below are deleted by
+	// view id alone, so without this guard a delete scoped to the wrong parent project would still
+	// wipe another project's buckets and positions while matching zero project_views rows.
+	if _, err = GetProjectViewByIDAndProject(s, pv.ID, pv.ProjectID); err != nil {
+		return err
+	}
+
 	_, err = s.
 		Where("id = ? AND project_id = ?", pv.ID, pv.ProjectID).
 		Delete(&ProjectView{})
@@ -273,7 +306,7 @@ func (pv *ProjectView) Delete(s *xorm.Session, _ web.Auth) (err error) {
 // @Security JWTKeyAuth
 // @Param project path int true "Project ID"
 // @Param view body models.ProjectView true "The project view you want to create."
-// @Success 200 {object} models.ProjectView "The created project view"
+// @Success 201 {object} models.ProjectView "The created project view"
 // @Failure 403 {object} web.HTTPError "The user does not have access to create a project view"
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /projects/{project}/views [put]
@@ -281,7 +314,14 @@ func (pv *ProjectView) Create(s *xorm.Session, a web.Auth) (err error) {
 	return createProjectView(s, pv, a, true, true)
 }
 
-func createProjectView(s *xorm.Session, p *ProjectView, a web.Auth, createBacklogBucket bool, addExistingTasksToView bool) (err error) {
+// Each filter bucket costs one task query per kanban read.
+const maxBucketConfigurations = 50
+
+func validateProjectViewFilters(p *ProjectView) (err error) {
+	if len(p.BucketConfiguration) > maxBucketConfigurations {
+		return InvalidFieldErrorWithMessage([]string{"bucket_configuration"}, fmt.Sprintf("A view can have at most %d bucket configurations.", maxBucketConfigurations))
+	}
+
 	if p.Filter != nil && p.Filter.Filter != "" {
 		_, err = getTaskFiltersFromFilterString(p.Filter.Filter, p.Filter.FilterTimezone)
 		if err != nil {
@@ -291,7 +331,10 @@ func createProjectView(s *xorm.Session, p *ProjectView, a web.Auth, createBacklo
 
 	if p.BucketConfigurationMode == BucketConfigurationModeFilter {
 		for _, configuration := range p.BucketConfiguration {
-			if configuration.Filter != nil && configuration.Filter.Filter != "" {
+			if configuration == nil || configuration.Filter == nil {
+				return InvalidFieldErrorWithMessage([]string{"bucket_configuration"}, "Every bucket configuration needs a filter.")
+			}
+			if configuration.Filter.Filter != "" {
 				_, err = getTaskFiltersFromFilterString(configuration.Filter.Filter, configuration.Filter.FilterTimezone)
 				if err != nil {
 					return
@@ -300,7 +343,95 @@ func createProjectView(s *xorm.Session, p *ProjectView, a web.Auth, createBacklo
 		}
 	}
 
+	return
+}
+
+func normalizeBucketConfigurationMode(p *ProjectView) {
+	if p.ViewKind != ProjectViewKindKanban {
+		p.BucketConfigurationMode = BucketConfigurationModeNone
+		return
+	}
+
+	if p.BucketConfigurationMode == BucketConfigurationModeNone {
+		p.BucketConfigurationMode = BucketConfigurationModeManual
+	}
+}
+
+// bucket_configuration_mode is optional in v1, so an omitted mode must keep the
+// stored one instead of converting a filter view to manual and mass-seeding it.
+func normalizeBucketConfigurationModeOnUpdate(p, oldView *ProjectView) {
+	if p.ViewKind == ProjectViewKindKanban &&
+		p.BucketConfigurationMode == BucketConfigurationModeNone &&
+		oldView.ViewKind == ProjectViewKindKanban &&
+		oldView.BucketConfigurationMode != BucketConfigurationModeNone {
+		p.BucketConfigurationMode = oldView.BucketConfigurationMode
+		// Inheriting the mode without the configuration would leave a filter view
+		// with zero buckets.
+		if p.BucketConfigurationMode == BucketConfigurationModeFilter && len(p.BucketConfiguration) == 0 {
+			p.BucketConfiguration = oldView.BucketConfiguration
+		}
+		return
+	}
+
+	normalizeBucketConfigurationMode(p)
+}
+
+func resolveBucketIDs(s *xorm.Session, p, oldView *ProjectView) (err error) {
+	p.DefaultBucketID, err = resolveBucketID(s, p.ID, p.DefaultBucketID, oldView.DefaultBucketID)
+	if err != nil {
+		return err
+	}
+
+	p.DoneBucketID, err = resolveBucketID(s, p.ID, p.DoneBucketID, oldView.DoneBucketID)
+	return err
+}
+
+func resolveBucketID(s *xorm.Session, viewID, incomingID, storedID int64) (int64, error) {
+	if incomingID == 0 {
+		return 0, nil
+	}
+
+	bucketViewID, exists, err := bucketProjectViewID(s, incomingID)
+	if err != nil {
+		return 0, err
+	}
+	if exists && bucketViewID == viewID {
+		return incomingID, nil
+	}
+
+	// Rejecting an id the frontend merely echoed back - of a bucket that is gone,
+	// or of the stale stored value - would lock the view until a reload.
+	if !exists || incomingID == storedID {
+		return 0, nil
+	}
+
+	return 0, ErrBucketDoesNotBelongToProjectView{
+		BucketID:      incomingID,
+		ProjectViewID: viewID,
+	}
+}
+
+func bucketProjectViewID(s *xorm.Session, bucketID int64) (viewID int64, exists bool, err error) {
+	exists, err = s.
+		Table(&Bucket{}).
+		Where(builder.Eq{"id": bucketID}).
+		Cols("project_view_id").
+		Get(&viewID)
+	return
+}
+
+func createProjectView(s *xorm.Session, p *ProjectView, a web.Auth, createBacklogBucket bool, addExistingTasksToView bool) (err error) {
+	normalizeBucketConfigurationMode(p)
+
+	err = validateProjectViewFilters(p)
+	if err != nil {
+		return
+	}
+
 	p.ID = 0
+	// No bucket can belong to a view which does not exist yet.
+	p.DefaultBucketID = 0
+	p.DoneBucketID = 0
 	_, err = s.Insert(p)
 	if err != nil {
 		return
@@ -313,51 +444,9 @@ func createProjectView(s *xorm.Session, p *ProjectView, a web.Auth, createBacklo
 	}
 
 	if p.ViewKind == ProjectViewKindKanban && createBacklogBucket && p.BucketConfigurationMode == BucketConfigurationModeManual {
-		// Create default buckets for kanban view
-		backlog := &Bucket{
-			ProjectViewID: p.ID,
-			Title:         "To-Do",
-			Position:      100,
-		}
-		err = backlog.Create(s, a)
+		err = createDefaultKanbanBuckets(s, a, p, addExistingTasksToView)
 		if err != nil {
 			return
-		}
-
-		doing := &Bucket{
-			ProjectViewID: p.ID,
-			Title:         "Doing",
-			Position:      200,
-		}
-		err = doing.Create(s, a)
-		if err != nil {
-			return
-		}
-
-		done := &Bucket{
-			ProjectViewID: p.ID,
-			Title:         "Done",
-			Position:      300,
-		}
-		err = done.Create(s, a)
-		if err != nil {
-			return
-		}
-
-		// Set Backlog as default bucket and Done as done bucket
-		p.DefaultBucketID = backlog.ID
-		p.DoneBucketID = done.ID
-		_, err = s.ID(p.ID).Cols("default_bucket_id", "done_bucket_id").Update(p)
-		if err != nil {
-			return
-		}
-
-		// Move all tasks into the new bucket when the project already has tasks
-		if addExistingTasksToView {
-			err = addTasksToView(s, a, p, backlog)
-			if err != nil {
-				return
-			}
 		}
 	}
 
@@ -368,31 +457,185 @@ func createProjectView(s *xorm.Session, p *ProjectView, a web.Auth, createBacklo
 	return
 }
 
-func addTasksToView(s *xorm.Session, a web.Auth, pv *ProjectView, b *Bucket) (err error) {
-	c := &TaskCollection{
-		ProjectID: pv.ProjectID,
+func createDefaultKanbanBuckets(s *xorm.Session, a web.Auth, p *ProjectView, addExistingTasksToView bool) (err error) {
+	backlog := &Bucket{
+		ProjectViewID: p.ID,
+		Title:         "To-Do",
+		Position:      100,
 	}
-	ts, _, _, err := c.ReadAll(s, a, "", 0, -1)
+	err = backlog.Create(s, a)
 	if err != nil {
-		return err
-	}
-	tasks := ts.([]*Task)
-
-	if len(tasks) == 0 {
-		return nil
+		return
 	}
 
-	taskBuckets := []*TaskBucket{}
-	for _, task := range tasks {
-		taskBuckets = append(taskBuckets, &TaskBucket{
-			TaskID:        task.ID,
-			BucketID:      b.ID,
-			ProjectViewID: pv.ID,
-		})
+	doing := &Bucket{
+		ProjectViewID: p.ID,
+		Title:         "Doing",
+		Position:      200,
+	}
+	err = doing.Create(s, a)
+	if err != nil {
+		return
 	}
 
-	_, err = s.Insert(&taskBuckets)
-	return err
+	done := &Bucket{
+		ProjectViewID: p.ID,
+		Title:         "Done",
+		Position:      300,
+	}
+	err = done.Create(s, a)
+	if err != nil {
+		return
+	}
+
+	p.DefaultBucketID = backlog.ID
+	p.DoneBucketID = done.ID
+	_, err = s.ID(p.ID).Cols("default_bucket_id", "done_bucket_id").Update(p)
+	if err != nil {
+		return
+	}
+
+	if addExistingTasksToView {
+		_, err = addTasksToView(s, p, backlog.ID)
+		if err != nil {
+			return
+		}
+	}
+
+	return
+}
+
+func addTasksToView(s *xorm.Session, pv *ProjectView, bucketID int64) (added int, err error) {
+	taskIDs, err := tasksWithoutBucketInView(s, pv)
+	if err != nil {
+		return 0, err
+	}
+
+	if err = insertTaskBuckets(s, pv.ID, bucketID, taskIDs); err != nil {
+		return 0, err
+	}
+
+	return len(taskIDs), nil
+}
+
+// insertTaskBuckets places tasks in a bucket, keeping rows whose
+// (task_id, project_view_id) pair already exists. Callers determine the missing
+// tasks with a separate select, so a concurrent transaction can place one of
+// them in the meantime; the existing row is then the newer state and a plain
+// insert would fail on the unique index.
+func insertTaskBuckets(s *xorm.Session, viewID, bucketID int64, taskIDs []int64) (err error) {
+	// Keep statements well below the parameter limits of all supported databases.
+	const batchSize = 100
+
+	var onConflict string
+	if db.Type() == schemas.MYSQL {
+		// The self-assignment is a no-op update which only ignores duplicate
+		// keys, unlike INSERT IGNORE which would swallow unrelated errors too.
+		onConflict = "ON DUPLICATE KEY UPDATE bucket_id = bucket_id"
+	} else {
+		onConflict = "ON CONFLICT (task_id, project_view_id) DO NOTHING"
+	}
+
+	// Raw SQL bypasses xorm's bean-based table-name handling, so qualify the
+	// table ourselves to honor a configured postgres schema (database.schema).
+	table := s.Engine().TableName(&TaskBucket{}, true)
+
+	for start := 0; start < len(taskIDs); start += batchSize {
+		batch := taskIDs[start:min(start+batchSize, len(taskIDs))]
+
+		placeholders := make([]string, 0, len(batch))
+		args := make([]interface{}, 1, len(batch)*3+1)
+		for _, taskID := range batch {
+			placeholders = append(placeholders, "(?, ?, ?)")
+			args = append(args, taskID, bucketID, viewID)
+		}
+
+		args[0] = "INSERT INTO " + table + " (task_id, bucket_id, project_view_id) VALUES " + strings.Join(placeholders, ", ") + " " + onConflict
+
+		_, err = s.Exec(args...)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func tasksWithoutBucketInView(s *xorm.Session, pv *ProjectView) (taskIDs []int64, err error) {
+	if filterID := GetSavedFilterIDFromProjectID(pv.ProjectID); filterID > 0 {
+		sf, err := GetSavedFilterSimpleByID(s, filterID)
+		if err != nil {
+			return nil, err
+		}
+
+		return filteredTasksWithoutBucketInView(s, pv.ID, sf)
+	}
+
+	return taskIDsWithoutBucketInView(s, pv.ID, builder.Eq{"tasks.project_id": pv.ProjectID}, false)
+}
+
+// Saved filter views have no project of their own, their task set only exists
+// once the filter is evaluated.
+func filteredTasksWithoutBucketInView(s *xorm.Session, viewID int64, sf *SavedFilter) (taskIDs []int64, err error) {
+	filterCond, joinTaskBuckets, err := parseFilterCond(sf.Filters.Filter, sf.Filters.FilterTimezone, sf.Filters.FilterIncludeNulls)
+	if err != nil {
+		return nil, err
+	}
+
+	// The filter alone matches tasks across the whole instance, restrict it to
+	// what its owner can actually see.
+	projects, err := getRelevantProjectsFromCollection(s, &user.User{ID: sf.OwnerID}, &TaskCollection{})
+	if err != nil {
+		return nil, err
+	}
+	projectIDs := make([]int64, 0, len(projects))
+	for _, p := range projects {
+		projectIDs = append(projectIDs, p.ID)
+	}
+
+	return taskIDsWithoutBucketInView(s, viewID, builder.And(
+		builder.In("tasks.project_id", projectIDs),
+		filterCond,
+	), joinTaskBuckets)
+}
+
+func taskIDsMatching(s *xorm.Session, cond builder.Cond) (taskIDs []int64, err error) {
+	return findTaskIDs(s.Table("tasks"), cond)
+}
+
+// taskIDsMatchingInView is for conditions built by convertFiltersToDBFilterCond which
+// resolve bucket_id against task_buckets, only in scope through this join.
+func taskIDsMatchingInView(s *xorm.Session, viewID int64, cond builder.Cond) (taskIDs []int64, err error) {
+	return findTaskIDs(
+		s.Table("tasks").Join("LEFT", "task_buckets", "task_buckets.task_id = tasks.id AND task_buckets.project_view_id = ?", viewID),
+		cond,
+	)
+}
+
+// Selecting ids instead of beans means xorm adds no soft-delete condition of its own.
+func findTaskIDs(query *xorm.Session, cond builder.Cond) (taskIDs []int64, err error) {
+	taskIDs = []int64{}
+	err = query.
+		Where(cond).
+		And(taskNotDeletedCond("tasks")).
+		Cols("tasks.id").
+		Find(&taskIDs)
+	return
+}
+
+func taskIDsWithoutBucketInView(s *xorm.Session, viewID int64, cond builder.Cond, joinTaskBuckets bool) (taskIDs []int64, err error) {
+	cond = builder.And(
+		cond,
+		builder.NotIn("tasks.id", builder.
+			Select("task_id").
+			From("task_buckets").
+			Where(builder.Eq{"project_view_id": viewID})),
+	)
+
+	if joinTaskBuckets {
+		return taskIDsMatchingInView(s, viewID, cond)
+	}
+	return taskIDsMatching(s, cond)
 }
 
 // Update is the handler to update a project view
@@ -409,34 +652,122 @@ func addTasksToView(s *xorm.Session, a web.Auth, pv *ProjectView, b *Bucket) (er
 // @Failure 400 {object} web.HTTPError "Invalid project view object provided."
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /projects/{project}/views/{id} [post]
-func (pv *ProjectView) Update(s *xorm.Session, _ web.Auth) (err error) {
-	if pv.Filter != nil && pv.Filter.Filter != "" {
-		_, err = getTaskFiltersFromFilterString(pv.Filter.Filter, pv.Filter.FilterTimezone)
+func (pv *ProjectView) Update(s *xorm.Session, a web.Auth) (err error) {
+	oldView, err := GetProjectViewByIDAndProject(s, pv.ID, pv.ProjectID)
+	if err != nil {
+		return
+	}
+
+	normalizeBucketConfigurationModeOnUpdate(pv, oldView)
+
+	err = validateProjectViewFilters(pv)
+	if err != nil {
+		return
+	}
+
+	err = resolveBucketIDs(s, pv, oldView)
+	if err != nil {
+		return
+	}
+
+	cols := []string{
+		"title",
+		"view_kind",
+		"filter",
+		"position",
+		"bucket_configuration_mode",
+		"bucket_configuration",
+	}
+	// A view without buckets has no business writing bucket ids - keeping the
+	// stored ones is what lets healBucketIDs restore them on the way back.
+	if pv.ViewKind == ProjectViewKindKanban {
+		cols = append(cols, "default_bucket_id", "done_bucket_id")
+	}
+
+	_, err = s.
+		ID(pv.ID).
+		Cols(cols...).
+		Update(pv)
+	if err != nil {
+		return
+	}
+
+	return syncManualKanbanBuckets(s, a, pv, oldView)
+}
+
+func syncManualKanbanBuckets(s *xorm.Session, a web.Auth, pv, oldView *ProjectView) (err error) {
+	// Pseudo views like favorites only exist in memory, seeding would write
+	// buckets on a view id shared by every user.
+	becameManualKanban := pv.ID > 0 &&
+		pv.ViewKind == ProjectViewKindKanban &&
+		pv.BucketConfigurationMode == BucketConfigurationModeManual &&
+		(oldView.ViewKind != ProjectViewKindKanban || oldView.BucketConfigurationMode != BucketConfigurationModeManual)
+	if !becameManualKanban {
+		return
+	}
+
+	// Buckets survive switching the view kind away from kanban and back, only
+	// seed defaults when there are none to avoid duplicates.
+	hasBuckets, err := s.Where(builder.Eq{"project_view_id": pv.ID}).Exist(&Bucket{})
+	if err != nil {
+		return
+	}
+
+	if hasBuckets {
+		err = healBucketIDs(s, pv, oldView)
+	} else {
+		err = createDefaultKanbanBuckets(s, a, pv, false)
+	}
+	if err != nil {
+		return
+	}
+
+	// Tasks created while the view was not a kanban view are not in any bucket yet
+	added, err := addTasksToView(s, pv, pv.DefaultBucketID)
+	if err != nil || added == 0 {
+		return err
+	}
+
+	return RecalculateTaskPositions(s, pv, a)
+}
+
+// Clients may omit both ids, restore them from the previous state unless the
+// bucket is gone by now.
+func healBucketIDs(s *xorm.Session, pv, oldView *ProjectView) (err error) {
+	if pv.DefaultBucketID == 0 {
+		pv.DefaultBucketID, err = existingBucketID(s, pv.ID, oldView.DefaultBucketID)
+		if err != nil {
+			return
+		}
+	}
+	if pv.DefaultBucketID == 0 {
+		pv.DefaultBucketID, err = getDefaultBucketID(s, pv)
+		if err != nil {
+			return
+		}
+	}
+	if pv.DoneBucketID == 0 {
+		pv.DoneBucketID, err = existingBucketID(s, pv.ID, oldView.DoneBucketID)
 		if err != nil {
 			return
 		}
 	}
 
-	// Check if the project view exists
-	_, err = GetProjectViewByIDAndProject(s, pv.ID, pv.ProjectID)
-	if err != nil {
-		return
+	_, err = s.ID(pv.ID).Cols("default_bucket_id", "done_bucket_id").Update(pv)
+	return
+}
+
+func existingBucketID(s *xorm.Session, viewID, bucketID int64) (int64, error) {
+	if bucketID == 0 {
+		return 0, nil
 	}
 
-	_, err = s.
-		ID(pv.ID).
-		Cols(
-			"title",
-			"view_kind",
-			"filter",
-			"position",
-			"bucket_configuration_mode",
-			"bucket_configuration",
-			"default_bucket_id",
-			"done_bucket_id",
-		).
-		Update(pv)
-	return
+	bucketViewID, exists, err := bucketProjectViewID(s, bucketID)
+	if err != nil || !exists || bucketViewID != viewID {
+		return 0, err
+	}
+
+	return bucketID, nil
 }
 
 func GetProjectViewByIDAndProject(s *xorm.Session, viewID, projectID int64) (view *ProjectView, err error) {

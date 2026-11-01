@@ -17,8 +17,15 @@
 package events
 
 import (
+	"context"
+	"errors"
+	"runtime"
 	"testing"
+	"time"
 
+	"code.vikunja.io/api/pkg/log"
+
+	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -40,7 +47,7 @@ func TestDispatchOnCommit(t *testing.T) {
 	assert.Equal(t, 0, CountDispatchedEvents("test.event"))
 
 	// Simulate post-commit dispatch
-	DispatchPending(key)
+	DispatchPending(context.Background(), key)
 
 	// Now it should be dispatched
 	assert.Equal(t, 1, CountDispatchedEvents("test.event"))
@@ -57,7 +64,7 @@ func TestDispatchOnCommitMultipleEvents(t *testing.T) {
 
 	assert.Equal(t, 0, CountDispatchedEvents("test.event"))
 
-	DispatchPending(key)
+	DispatchPending(context.Background(), key)
 
 	assert.Equal(t, 3, CountDispatchedEvents("test.event"))
 }
@@ -74,7 +81,7 @@ func TestCleanupPending(t *testing.T) {
 	CleanupPending(key)
 
 	// Dispatching after cleanup should be a no-op
-	DispatchPending(key)
+	DispatchPending(context.Background(), key)
 
 	assert.Equal(t, 0, CountDispatchedEvents("test.event"))
 }
@@ -85,8 +92,107 @@ func TestDispatchPendingNoEvents(t *testing.T) {
 	key := new(int)
 
 	// Should be a no-op
-	DispatchPending(key)
+	DispatchPending(context.Background(), key)
 
 	// Verify no events were dispatched
 	assert.Equal(t, 0, CountDispatchedEvents("test.event"))
+}
+
+func TestOnCommit(t *testing.T) {
+	log.InitLogger()
+
+	t.Run("runs on DispatchPending before events", func(t *testing.T) {
+		Fake()
+		key := new(int)
+		var calls []int
+		var dispatchedBeforeCallback int
+
+		OnCommit(key, func() error {
+			dispatchedBeforeCallback = CountDispatchedEvents("test.event")
+			calls = append(calls, 1)
+			return errors.New("failing callback must not stop the others")
+		})
+		DispatchOnCommit(key, &testEvent{})
+		OnCommit(key, func() error {
+			calls = append(calls, 2)
+			return nil
+		})
+		assert.Empty(t, calls)
+
+		DispatchPending(context.Background(), key)
+
+		assert.Equal(t, []int{1, 2}, calls)
+		assert.Zero(t, dispatchedBeforeCallback)
+		assert.Equal(t, 1, CountDispatchedEvents("test.event"))
+
+		DispatchPending(context.Background(), key)
+		assert.Equal(t, []int{1, 2}, calls, "must run only once")
+	})
+	t.Run("dropped by CleanupPending", func(t *testing.T) {
+		Fake()
+		key := new(int)
+		called := false
+
+		OnCommit(key, func() error {
+			called = true
+			return nil
+		})
+		CleanupPending(key)
+		DispatchPending(context.Background(), key)
+
+		assert.False(t, called)
+	})
+}
+
+func TestShouldReportPoisonedMessage(t *testing.T) {
+	t.Run("no metadata", func(t *testing.T) {
+		assert.True(t, shouldReportPoisonedMessage(message.Metadata{}))
+	})
+	t.Run("unrelated metadata", func(t *testing.T) {
+		assert.True(t, shouldReportPoisonedMessage(message.Metadata{"reason_poisoned": "boom"}))
+	})
+	t.Run("flag set", func(t *testing.T) {
+		assert.False(t, shouldReportPoisonedMessage(message.Metadata{MetadataSkipErrorReporting: "true"}))
+	})
+	t.Run("flag set to something else", func(t *testing.T) {
+		assert.True(t, shouldReportPoisonedMessage(message.Metadata{MetadataSkipErrorReporting: "false"}))
+	})
+}
+
+func TestWaitForPendingHandlersDuringNewDelivery(t *testing.T) {
+	previous := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previous)
+
+	activeHandlers.start()
+	started := make(chan struct{})
+	returned := make(chan any, 1)
+	go func() {
+		defer func() { returned <- recover() }()
+		close(started)
+		WaitForPendingHandlers()
+	}()
+	<-started
+	runtime.Gosched()
+
+	// A redelivery starts before the drain waiter resumes.
+	activeHandlers.finish()
+	activeHandlers.start()
+	runtime.Gosched()
+
+	select {
+	case result := <-returned:
+		activeHandlers.finish()
+		// Returning in the gap between deliveries is valid; panicking is not.
+		assert.Nil(t, result, "drain panicked during redelivery")
+		return
+	default:
+	}
+
+	activeHandlers.finish()
+	select {
+	case result := <-returned:
+		assert.Nil(t, result, "drain panicked")
+	case <-time.After(time.Second):
+		t.Fatal("drain did not return after all handlers finished")
+	}
 }

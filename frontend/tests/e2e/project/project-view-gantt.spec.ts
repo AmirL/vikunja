@@ -3,8 +3,35 @@ import dayjs from 'dayjs'
 import {TaskFactory} from '../../factories/task'
 import {ProjectFactory} from '../../factories/project'
 import {ProjectViewFactory} from '../../factories/project_view'
+import {updateUserSettings} from '../../support/updateUserSettings'
 
 test.describe('Project View Gantt', () => {
+	test('Shows the correct start of the week in the date picker', async ({authenticatedPage: page, apiContext, userToken}) => {
+		await ProjectFactory.create(1)
+		await ProjectViewFactory.create(1, {id: 2, project_id: 1, view_kind: 1})
+
+		// Set the week start to Monday (1)
+		await updateUserSettings(apiContext, userToken, {week_start: 1})
+
+		await page.goto('/projects/1/2')
+		// Reload to ensure settings are loaded fresh from the API
+		await page.reload()
+		await page.waitForLoadState('networkidle')
+
+		// Open the date range picker
+		const dateInput = page.locator('.project-gantt .gantt-options .date-range-input__trigger')
+		await expect(dateInput).toBeVisible()
+		await dateInput.click()
+
+		// Wait for the calendar to be visible and open
+		const calendar = page.locator('.project-gantt .date-range-input .popup.is-open')
+		await expect(calendar).toBeVisible({timeout: 10000})
+
+		// Verify the first weekday in the calendar is Monday
+		const firstWeekday = calendar.locator('.calendar-month__weekday').first()
+		await expect(firstWeekday).toHaveText(/^Mo/i)
+	})
+
 	test('Hides tasks with no dates', async ({authenticatedPage: page}) => {
 		await ProjectFactory.create(1)
 		await ProjectViewFactory.create(1, {id: 2, project_id: 1, view_kind: 1})
@@ -63,7 +90,7 @@ test.describe('Project View Gantt', () => {
 		await ProjectFactory.create(1)
 		await ProjectViewFactory.create(1, {id: 2, project_id: 1, view_kind: 1})
 		const taskUpdatePromise = page.waitForResponse(response =>
-			response.url().includes('/tasks/') && response.request().method() === 'POST',
+			response.url().includes('/tasks/') && response.request().method() === 'PATCH',
 		)
 
 		const now = new Date()
@@ -99,9 +126,9 @@ test.describe('Project View Gantt', () => {
 
 		await page.goto('/projects/1/2')
 
-		await page.locator('.project-gantt .gantt-options .field .control input.input.form-control').click()
-		await page.locator('.flatpickr-calendar .flatpickr-innerContainer .dayContainer .flatpickr-day').first().click()
-		await page.locator('.flatpickr-calendar .flatpickr-innerContainer .dayContainer .flatpickr-day').last().click()
+		await page.locator('.project-gantt .gantt-options .date-range-input__trigger').click()
+		await page.locator('.project-gantt .date-range-input .calendar-month__day').first().click()
+		await page.locator('.project-gantt .date-range-input .calendar-month__day').last().click()
 
 		await expect(page).toHaveURL(/dateFrom=2022-09-25/)
 		await expect(page).toHaveURL(/dateTo=2022-11-05/)
@@ -115,7 +142,7 @@ test.describe('Project View Gantt', () => {
 		await expect(page.locator('.gantt-timeline-months')).toContainText('September 2022')
 		await expect(page.locator('.gantt-timeline-months')).toContainText('October 2022')
 		await expect(page.locator('.gantt-timeline-months')).toContainText('November 2022')
-		await expect(page.locator('.project-gantt .gantt-options .field .control input.input.form-control')).toHaveValue('25 Sep 2022 to 5 Nov 2022')
+		await expect(page.locator('.project-gantt .gantt-options .date-range-input__trigger')).toHaveText('Sep 25, 2022 – Nov 5, 2022')
 	})
 
 	test('Should open a task when double clicked on it', async ({authenticatedPage: page}) => {
@@ -123,13 +150,38 @@ test.describe('Project View Gantt', () => {
 		await ProjectViewFactory.create(1, {id: 2, project_id: 1, view_kind: 1})
 		const now = new Date()
 		const tasks = await TaskFactory.create(1, {
-			start_date: dayjs(now).format(),
-			end_date: dayjs(now.setDate(now.getDate() + 4)).format(),
+			start_date: dayjs(now).toISOString(),
+			end_date: dayjs(now.setDate(now.getDate() + 4)).toISOString(),
 		})
 		await page.goto('/projects/1/2')
 
 		await page.locator('.gantt-container .gantt-row-bars .gantt-bar').dblclick()
 
 		await expect(page).toHaveURL(new RegExp(`/tasks/${tasks[0].id}`))
+	})
+
+	test('Should preserve date range query parameters after opening and closing a task modal', async ({authenticatedPage: page}) => {
+		await ProjectFactory.create(1)
+		await ProjectViewFactory.create(1, {id: 2, project_id: 1, view_kind: 1})
+		await TaskFactory.create(1, {
+			start_date: new Date(2022, 9, 1).toISOString(),
+			end_date: new Date(2022, 9, 5).toISOString(),
+		})
+		await page.goto('/projects/1/2?dateFrom=2022-09-25&dateTo=2022-11-05')
+
+		// Verify the date range is shown
+		await expect(page).toHaveURL(/dateFrom=2022-09-25/)
+		await expect(page).toHaveURL(/dateTo=2022-11-05/)
+
+		// Double-click the task to open the modal
+		await page.locator('.gantt-container .gantt-row-bars .gantt-bar').dblclick()
+		await expect(page).toHaveURL(/\/tasks\//)
+
+		// Close the modal
+		await page.locator('dialog[open] .modal-container > .close').click()
+
+		// Verify the date range query parameters are preserved
+		await expect(page).toHaveURL(/dateFrom=2022-09-25/)
+		await expect(page).toHaveURL(/dateTo=2022-11-05/)
 	})
 })

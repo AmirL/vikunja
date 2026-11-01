@@ -14,6 +14,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+// Yaegi evaluates this at runtime via its exported factories, so there is no func main
+// and it must stay out of `go build ./...`.
+//go:build ignore
+
 package main
 
 import (
@@ -92,7 +96,19 @@ func handleStatus(c *echo.Context) error {
 	})
 }
 
-func NewPlugin() plugins.Plugin { return &ExamplePlugin{} }
+// singleton ensures all factory functions return the same instance so that state
+// initialized in Init() (e.g. event listeners, DB connections) is available to
+// route handlers and other capabilities.
+var singleton = &ExamplePlugin{}
+
+func NewPlugin() plugins.Plugin { return singleton }
+
+// Typed factory functions for Yaegi compatibility.
+// Yaegi wraps return values per the declared return type, so sub-interface type
+// assertions (Plugin -> AuthenticatedRouterPlugin) don't work. These typed
+// factories ensure Yaegi wraps the value with the correct interface wrapper.
+func NewAuthenticatedRouterPlugin() plugins.AuthenticatedRouterPlugin     { return singleton }
+func NewUnauthenticatedRouterPlugin() plugins.UnauthenticatedRouterPlugin { return singleton }
 
 type TestListener struct{}
 

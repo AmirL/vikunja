@@ -70,9 +70,6 @@
 				"subject": "Påminnelse om \"%[1]s\" (%[2]s)",
 				"message": "Det här är en vänlig påminnelse om uppgiften \"%[1]s\" (%[2])."
 			},
-			"comment": {
-				"mentioned_message": "**%[1]s** nämnde dig i en kommentar:"
-			},
 			"assigned": {
 				"subject_to_assignee": "Du har tilldelats till \"%[1]s\" (%[2]s)",
 				"message_to_assignee": "%[1]s har tilldelat dig till \"%[2]s\".",
@@ -85,14 +82,10 @@
 				"subject": "\"%[1]s\" (%[2]s) har raderats",
 				"message": "%[1]s har raderat uppgiften \"%[2]s\" (%[3]s)"
 			},
-			"mentioned": {
-				"message": "**%[1]s** nämnde dig i en uppgift:"
-			},
 			"overdue": {
 				"subject": "Uppgift \"%[1]s\" (%[2]s) är förfallen",
 				"message": "Det här är en vänlig påminnelse om uppgiften \"%[1]s\" (%[2]s) som är förfallen %[3]s och ännu inte färdig.",
 				"multiple_subject": "Dina förfallna uppgifter",
-				"multiple_message": "Du har följande förfallna uppgifter:",
 				"overdue_since": "sedan %[1]s",
 				"overdue_now": "nu",
 				"overdue": "förfallen %[1]s"

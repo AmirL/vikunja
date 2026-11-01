@@ -3,7 +3,7 @@
 		<div
 			v-for="(r, index) in reminders"
 			:key="index"
-			:data-is-overdue="r.reminder < now || undefined"
+			:data-is-overdue="isOverdue(r) || undefined"
 			class="reminder-input"
 		>
 			<ReminderDetail
@@ -11,11 +11,13 @@
 				class="reminder-detail"
 				:disabled="disabled"
 				:default-relative-to="defaultRelativeTo"
+				:allow-absolute="allowAbsolute"
 				@update:modelValue="updateData"
 			/>
 			<BaseButton
 				v-if="!disabled"
 				class="remove"
+				:aria-label="$t('task.removeReminder')"
 				@click="removeReminderByIndex(index)"
 			>
 				<Icon icon="times" />
@@ -26,74 +28,63 @@
 			:disabled="disabled"
 			:clear-after-update="true"
 			:default-relative-to="defaultRelativeTo"
+			:allow-absolute="allowAbsolute"
 			@update:modelValue="addNewReminder"
 		/>
 	</div>
 </template>
 
 <script setup lang="ts">
-import {ref, watch, computed} from 'vue'
+import {ref, watch} from 'vue'
 
-import type {ITaskReminder} from '@/modelTypes/ITaskReminder'
+import type {TaskReminder as ITaskReminder} from '@/client/generated'
+import type {IReminderPeriodRelativeTo} from '@/types/IReminderPeriodRelativeTo'
+
+import {parseDateOrNull} from '@/helpers/parseDateOrNull'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import ReminderDetail from '@/components/tasks/partials/ReminderDetail.vue'
-import type {ITask} from '@/modelTypes/ITask'
-import {REMINDER_PERIOD_RELATIVE_TO_TYPES} from '@/types/IReminderPeriodRelativeTo'
-import { useNow } from '@vueuse/core'
+import {useNow} from '@vueuse/core'
 
 const props = withDefaults(defineProps<{
-	modelValue: ITask,
+	modelValue?: ITaskReminder[],
+	defaultRelativeTo?: IReminderPeriodRelativeTo | null,
 	disabled?: boolean,
+	allowAbsolute?: boolean,
 }>(), {
+	modelValue: () => [],
+	defaultRelativeTo: null,
 	disabled: false,
+	allowAbsolute: true,
 })
 
 const emit = defineEmits<{
-	'update:modelValue': [ITask]
+	'update:modelValue': [ITaskReminder[]]
 }>()
 
 const reminders = ref<ITaskReminder[]>([])
 
 const now = useNow({interval: 1000})
 
+function isOverdue(reminder: ITaskReminder): boolean {
+	const date = parseDateOrNull(reminder.reminder)
+	return date !== null && date < now.value
+}
+
 watch(
-	() => props.modelValue.reminders,
+	() => props.modelValue,
 	(newVal) => {
-		reminders.value = newVal
+		reminders.value = [...(newVal ?? [])]
 	},
 	{immediate: true, deep: true}, // deep watcher so that we get the resolved date after updating the task
 )
 
-const defaultRelativeTo = computed(() => {
-	if (typeof props.modelValue === 'undefined') {
-		return null
-	}
-	
-	if (props.modelValue?.dueDate) {
-		return REMINDER_PERIOD_RELATIVE_TO_TYPES.DUEDATE
-	}
-	
-	if (props.modelValue.dueDate === null && props.modelValue.startDate !== null) {
-		return REMINDER_PERIOD_RELATIVE_TO_TYPES.STARTDATE
-	}
-	
-	if (props.modelValue.dueDate === null && props.modelValue.startDate === null && props.modelValue.endDate !== null) {
-		return REMINDER_PERIOD_RELATIVE_TO_TYPES.ENDDATE
-	}
-	
-	return null
-})
-
 function updateData() {
-	emit('update:modelValue', {
-		...props.modelValue,
-		reminders: reminders.value,
-	})
+	emit('update:modelValue', [...reminders.value])
 }
 
-function addNewReminder(newReminder: ITaskReminder|null) {
-	if (newReminder === null) {
+function addNewReminder(newReminder: ITaskReminder | undefined) {
+	if (!newReminder) {
 		return
 	}
 	reminders.value.push(newReminder)
@@ -112,7 +103,7 @@ function removeReminderByIndex(index: number) {
 	align-items: center;
 
 	&[data-is-overdue] :deep(.datepicker .show) {
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 
 	&:last-child {

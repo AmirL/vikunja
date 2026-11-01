@@ -25,3 +25,44 @@ type CreatedEvent struct {
 func (t *CreatedEvent) Name() string {
 	return "user.created"
 }
+
+// LoginSucceededEvent is fired after a user successfully authenticated,
+// regardless of the auth provider (local, LDAP, OpenID).
+type LoginSucceededEvent struct {
+	User *User `json:"user"`
+}
+
+// Name defines the name for LoginSucceededEvent
+func (t *LoginSucceededEvent) Name() string {
+	return "user.login.succeeded"
+}
+
+// LoginFailedEvent is fired for every failed password check of a known user.
+type LoginFailedEvent struct {
+	User *User `json:"user"`
+}
+
+// Name defines the name for LoginFailedEvent
+func (t *LoginFailedEvent) Name() string {
+	return "user.login.failed"
+}
+
+// LogoutEvent is fired when a user destroys their session.
+type LogoutEvent struct {
+	UserID int64 `json:"user_id"`
+}
+
+// Name defines the name for LogoutEvent
+func (t *LogoutEvent) Name() string {
+	return "user.logout"
+}
+
+// AccountLockedEvent is fired when an account is locked after too many failed TOTP attempts.
+type AccountLockedEvent struct {
+	UserID int64 `json:"user_id"`
+}
+
+// Name defines the name for AccountLockedEvent
+func (t *AccountLockedEvent) Name() string {
+	return "user.account.locked"
+}

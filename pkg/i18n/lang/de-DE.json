@@ -7,6 +7,11 @@
 			"welcome": "Willkommen bei Vikunja!",
 			"confirm": "Um deine E-Mail-Adresse zu bestätigen, klicke auf den Link unten:"
 		},
+		"email_change": {
+			"subject": "Es wurde eine Änderung der E-Mail-Adresse für dein Vikunja-Konto angefordert",
+			"requested": "Jemand hat beantragt, die E-Mail-Adresse deines Kontos in %[1]s zu ändern. Deine aktuelle Adresse bleibt aktiv, bis die neue bestätigt ist.",
+			"warning": "Wenn Du das nicht warst, ändere sofort dein Passwort und breche die ausstehende Änderung in den Kontoeinstellungen ab."
+		},
 		"password": {
 			"changed": {
 				"subject": "Dein Passwort bei Vikunja wurde geändert",
@@ -72,8 +77,7 @@
 			},
 			"comment": {
 				"subject": "Re: %[1]s (%[2]s)",
-				"mentioned_subject": "%[1]s hat dich in einem Kommentar zu „%[2]s“ (%[3]s) erwähnt",
-				"mentioned_message": "**%[1]s** hat dich in einem Kommentar erwähnt:"
+				"mentioned_subject": "%[1]s hat dich in einem Kommentar zu „%[2]s“ (%[3]s) erwähnt"
 			},
 			"assigned": {
 				"subject_to_assignee": "Du wurdest „%[1]s“ (%[2]s) zugewiesen",
@@ -87,16 +91,21 @@
 				"subject": "„%[1]s“ (%[2]s) wurde gelöscht",
 				"message": "%[1]s hat die Aufgabe „%[2]s“ (%[3]s) gelöscht"
 			},
+			"created": {
+				"subject": "„%[1]s“ (%[2]s) wurde erstellt",
+				"message": "%[1]s hat die Aufgabe \"%[2]s\" (%[3]s) erstellt"
+			},
 			"mentioned": {
 				"subject_new": "%[1]s hat dich in einer neuen Aufgabe „%[2]s“ (%[3]s) erwähnt",
-				"subject": "%[1]s hat dich in einer Aufgabe „%[2]s“ (%[3]s) erwähnt",
-				"message": "**%[1]s** hat dich in einer Aufgabe erwähnt:"
+				"subject": "%[1]s hat dich in einer Aufgabe „%[2]s“ (%[3]s) erwähnt"
 			},
 			"overdue": {
 				"subject": "Aufgabe „%[1]s“ (%[2]s) ist überfällig",
 				"message": "Dies ist eine freundliche Erinnerung an die Aufgabe „%[1]s“ (%[2]s), die %[3]s überfällig und noch nicht erledigt ist.",
 				"multiple_subject": "Deine überfälligen Aufgaben",
-				"multiple_message": "Du hast folgende überfällige Aufgaben:",
+				"multiple_message": "Deine überfälligen Aufgaben:",
+				"assigned_heading": "Dir zugewiesen",
+				"followed_heading": "Aufgaben, die du verfolgst",
 				"overdue_since": "seit %[1]s",
 				"overdue_now": "jetzt",
 				"overdue": "überfällig %[1]s"
@@ -133,6 +142,19 @@
 				"working_on_it": "Wir haben die Fehlermeldung auf dem Schirm und arbeiten daran, das Problem bald zu beheben."
 			}
 		},
+		"api_token": {
+			"expiring": {
+				"week": {
+					"subject": "Dein API-Token „%[1]s“ läuft bald ab",
+					"message": "Dein API-Token \"%[1]s\" läuft am %[2]s ab (in %[3]s). Wenn du ihn noch brauchst, erstelle bitte vor Ablauf einen neuen Token."
+				},
+				"day": {
+					"subject": "Dein API-Token „%[1]s“ läuft morgen ab",
+					"message": "Dein API-Token \"%[1]s\" läuft am %[2]s ab (in %[3]s). Wenn du es noch brauchst, erstelle bitte einen neuen Token, bevor es abläuft."
+				},
+				"action": "API-Token verwalten"
+			}
+		},
 		"common": {
 			"have_nice_day": "Hab einen schönen Tag!",
 			"copy_url": "Falls der Button oben nicht funktioniert, kopiere die untenstehende URL und füge sie in die Adressleiste deines Browsers ein:",
@@ -151,10 +173,7 @@
 				"left_comment": "%[1]s hat kommentiert",
 				"mentioned_you_comment": "%[1]s hat dich in einem Kommentar erwähnt",
 				"mentioned_you": "%[1]s hat dich erwähnt",
-				"mentioned_you_new_task": "%[1]s hat dich in einer neuen Aufgabe erwähnt",
-				"assigned_you": "%[1]s hat dich zugewiesen",
-				"assigned_themselves": "%[1]s hat sich selbst zugewiesen",
-				"assigned_user": "%[1]s hat %[2]s zugewiesen"
+				"mentioned_you_new_task": "%[1]s hat dich in einer neuen Aufgabe erwähnt"
 			}
 		}
 	},
@@ -165,5 +184,10 @@
 		"since_hours": "einer Stunde|%[1]d Stunden",
 		"since_minutes": "einer Minute|%[1]d Minuten",
 		"list_last_separator": "und"
+	},
+	"feeds": {
+		"notifications": {
+			"title": "Vikunja Benachrichtigungen für %[1]s"
+		}
 	}
 }

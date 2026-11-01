@@ -11,7 +11,7 @@ async function loginViaBrowser(page, username: string) {
 	await page.locator('input[id=password]').fill(TEST_PASSWORD)
 	await page.locator('.button').filter({hasText: 'Login'}).click()
 	await expect(page).toHaveURL('/')
-	await expect(page.locator('main h2')).toContainText(username)
+	await expect(page.locator('main h1')).toContainText(username)
 
 	// Wait for the proactive refresh (from useRenewTokenOnFocus) to complete
 	// so it doesn't race with our test assertions.
@@ -34,7 +34,7 @@ test.describe('Session refresh and retry interceptor', () => {
 
 		// Spy on the refresh endpoint
 		let refreshCalled = false
-		await page.route(/\/api\/v1\/user\/token\/refresh$/, async (route) => {
+		await page.route(/\/api\/v2\/user\/token\/refresh$/, async (route) => {
 			refreshCalled = true
 			await route.continue()
 		})
@@ -42,10 +42,20 @@ test.describe('Session refresh and retry interceptor', () => {
 		// Intercept the first GET to /user/sessions with 401 code 11.
 		// We navigate to the sessions page to trigger this call, avoiding
 		// a race with the proactive refresh that fires on page reload.
-		let intercepted = false
-		await page.route(/\/api\/v1\/user\/sessions/, async (route) => {
-			if (!intercepted && route.request().method() === 'GET') {
-				intercepted = true
+		const sessionsAuthHeaders: (string | null)[] = []
+		let interceptedIndex = -1
+		await page.route(/\/api\/v2\/user\/sessions/, async (route) => {
+			const request = route.request()
+			if (request.method() !== 'GET') {
+				await route.continue()
+				return
+			}
+
+			const index = sessionsAuthHeaders.length
+			sessionsAuthHeaders.push(await request.headerValue('authorization'))
+
+			if (interceptedIndex === -1) {
+				interceptedIndex = index
 				await route.fulfill({
 					status: 401,
 					contentType: 'application/json',
@@ -54,9 +64,10 @@ test.describe('Session refresh and retry interceptor', () => {
 						message: 'missing, malformed, expired or otherwise invalid token provided',
 					}),
 				})
-			} else {
-				await route.continue()
+				return
 			}
+
+			await route.continue()
 		})
 
 		await page.goto('/user/settings/sessions')
@@ -64,8 +75,14 @@ test.describe('Session refresh and retry interceptor', () => {
 		// The sessions page should load after transparent retry
 		await expect(page.locator('.tag.is-primary')).toBeVisible({timeout: 10000})
 
-		expect(intercepted).toBe(true)
+		expect(interceptedIndex).toBe(0)
 		expect(refreshCalled).toBe(true)
+
+		// The retried GET must carry a rotated JWT, not the one the 401 rejected.
+		await expect.poll(() => sessionsAuthHeaders.length, {timeout: 10000}).toBeGreaterThan(interceptedIndex + 1)
+		expect(sessionsAuthHeaders[interceptedIndex]).not.toBeNull()
+		expect(sessionsAuthHeaders[interceptedIndex + 1]).not.toBeNull()
+		expect(sessionsAuthHeaders[interceptedIndex + 1]).not.toBe(sessionsAuthHeaders[interceptedIndex])
 
 		// The JWT in localStorage should have been rotated
 		const tokenAfter = await page.evaluate(() => localStorage.getItem('token'))
@@ -82,7 +99,7 @@ test.describe('Session refresh and retry interceptor', () => {
 		let projectsFailed = false
 		let refreshAfterFailure = false
 
-		await page.route(/\/api\/v1\/user\/token\/refresh$/, async (route) => {
+		await page.route(/\/api\/v2\/user\/token\/refresh$/, async (route) => {
 			if (projectsFailed) {
 				refreshAfterFailure = true
 			}
@@ -90,7 +107,7 @@ test.describe('Session refresh and retry interceptor', () => {
 		})
 
 		// Return 401 with a non-JWT error code for all project GETs.
-		await page.route(/\/api\/v1\/projects(\?|$)/, async (route) => {
+		await page.route(/\/api\/v2\/projects(\?|$)/, async (route) => {
 			if (route.request().method() === 'GET') {
 				projectsFailed = true
 				await route.fulfill({

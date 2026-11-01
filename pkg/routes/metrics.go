@@ -18,14 +18,14 @@ package routes
 
 import (
 	"crypto/subtle"
+	"net/http"
+	"net/http/pprof"
 
 	"code.vikunja.io/api/pkg/config"
-	"code.vikunja.io/api/pkg/files"
 	"code.vikunja.io/api/pkg/log"
 	"code.vikunja.io/api/pkg/metrics"
 	"code.vikunja.io/api/pkg/models"
 	auth2 "code.vikunja.io/api/pkg/modules/auth"
-	"code.vikunja.io/api/pkg/user"
 
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/echo/v5/middleware"
@@ -39,60 +39,47 @@ func setupMetrics(a *echo.Group) {
 
 	metrics.InitMetrics()
 
-	type countable struct {
-		Key  string
-		Type interface{}
-	}
-
-	for _, c := range []countable{
-		{
-			metrics.ProjectCountKey,
-			models.Project{},
-		},
-		{
-			metrics.UserCountKey,
-			user.User{},
-		},
-		{
-			metrics.TaskCountKey,
-			models.Task{},
-		},
-		{
-			metrics.TeamCountKey,
-			models.Team{},
-		},
-		{
-			metrics.FilesCountKey,
-			files.File{},
-		},
-		{
-			metrics.AttachmentsCountKey,
-			models.TaskAttachment{},
-		},
-	} {
-		// Set initial totals
-		total, err := models.GetTotalCount(c.Type)
-		if err != nil {
-			log.Fatalf("Could not get initial count for %v, error was %s", c.Type, err)
-		}
-		if err := metrics.SetCount(total, c.Key); err != nil {
-			log.Fatalf("Could not set initial count for %v, error was %s", c.Type, err)
-		}
-	}
-
 	r := a.Group("/metrics")
-
-	if config.MetricsUsername.GetString() != "" && config.MetricsPassword.GetString() != "" {
-		r.Use(middleware.BasicAuth(func(_ *echo.Context, username, password string) (bool, error) {
-			if subtle.ConstantTimeCompare([]byte(username), []byte(config.MetricsUsername.GetString())) == 1 &&
-				subtle.ConstantTimeCompare([]byte(password), []byte(config.MetricsPassword.GetString())) == 1 {
-				return true, nil
-			}
-			return false, nil
-		}))
+	if auth := metricsBasicAuth(); auth != nil {
+		r.Use(auth)
 	}
 
 	r.GET("", echo.WrapHandler(promhttp.HandlerFor(metrics.GetRegistry(), promhttp.HandlerOpts{})))
+}
+
+func metricsBasicAuth() echo.MiddlewareFunc {
+	if config.MetricsUsername.GetString() == "" || config.MetricsPassword.GetString() == "" {
+		return nil
+	}
+	return middleware.BasicAuth(func(_ *echo.Context, username, password string) (bool, error) {
+		if subtle.ConstantTimeCompare([]byte(username), []byte(config.MetricsUsername.GetString())) == 1 &&
+			subtle.ConstantTimeCompare([]byte(password), []byte(config.MetricsPassword.GetString())) == 1 {
+			return true, nil
+		}
+		return false, nil
+	})
+}
+
+// Go's profiler at its canonical path (pprof.Index derives the profile name from it), gated like the metrics
+// endpoint. Explicit handlers rather than the net/http/pprof blank import, which would register them on
+// http.DefaultServeMux unconditionally.
+func setupPprof(e *echo.Echo) {
+	if !config.MetricsEnabled.GetBool() || !config.MetricsPprof.GetBool() {
+		return
+	}
+
+	r := e.Group("/debug/pprof")
+	if auth := metricsBasicAuth(); auth != nil {
+		r.Use(auth)
+	}
+
+	r.GET("/cmdline", echo.WrapHandler(http.HandlerFunc(pprof.Cmdline)))
+	r.GET("/profile", echo.WrapHandler(http.HandlerFunc(pprof.Profile)))
+	r.GET("/symbol", echo.WrapHandler(http.HandlerFunc(pprof.Symbol)))
+	r.POST("/symbol", echo.WrapHandler(http.HandlerFunc(pprof.Symbol)))
+	r.GET("/trace", echo.WrapHandler(http.HandlerFunc(pprof.Trace)))
+	r.GET("/", echo.WrapHandler(http.HandlerFunc(pprof.Index)))
+	r.GET("/*", echo.WrapHandler(http.HandlerFunc(pprof.Index)))
 }
 
 func setupMetricsMiddleware(a *echo.Group) {
@@ -102,11 +89,11 @@ func setupMetricsMiddleware(a *echo.Group) {
 
 	a.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
-
-			// Update currently active users
-			if err := updateActiveUsersFromContext(c); err != nil {
-				log.Error(err)
-				return next(c)
+			// Unauthenticated routes share this middleware and have no user to count.
+			if auth2.HasAuthInContext(c) {
+				if err := updateActiveUsersFromContext(c); err != nil {
+					log.Error(err)
+				}
 			}
 			return next(c)
 		}

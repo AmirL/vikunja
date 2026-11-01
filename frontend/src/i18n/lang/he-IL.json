@@ -39,12 +39,10 @@
 			"email": "כתובת אימייל",
 			"emailPlaceholder": "למשל david{'@'}vikunja.io",
 			"password": "סיסמה",
-			"passwordPlaceholder": "למשל •••••••••••",
 			"forgotPassword": "שכחת סיסמתך?",
 			"resetPassword": "לאפס סיסמתך",
 			"resetPasswordAction": "לשלוח לי לינק לאיפוס סיסמה",
 			"resetPasswordSuccess": "נא לבדוק בתיבת דואר נכנס! אמור להיות מייל עם הוראות לאיפוס סיסמתך.",
-			"passwordsDontMatch": "הסיסמאות לא תואמות",
 			"confirmEmailSuccess": "אישרת את המייל בהצלחה! כעת אפשר להיכנס.",
 			"totpTitle": "קוד אימות דו שלבי",
 			"totpPlaceholder": "למשל 123456",
@@ -73,14 +71,11 @@
 			"title": "הגדרות",
 			"newPasswordTitle": "עדכון סיסמה",
 			"newPassword": "סיסמה חדשה",
-			"newPasswordConfirm": "אישור סיסמה חדשה",
 			"currentPassword": "סיסמה נוכחית",
 			"currentPasswordPlaceholder": "סיסמתך הנוכחית",
-			"passwordsDontMatch": "סיסמה חדשה לא תואמת אימות סיסמה.",
 			"passwordUpdateSuccess": "סיסמה עודכנה בהצלחה.",
 			"updateEmailTitle": "עדכון כתובת אימייל",
 			"updateEmailNew": "כתובת אימייל חדשה",
-			"updateEmailSuccess": "כתובת אימייל שלך עודכנה בהצלחה. שלחנו לך במייל לינק לאשר.",
 			"general": {
 				"title": "הגדרות כלליות",
 				"name": "השם שלי",
@@ -137,7 +132,6 @@
 			},
 			"appearance": {
 				"title": "סכמה צבעים",
-				"setSuccess": "נשמרה סכמה צבעים ל-{colorScheme}",
 				"colorScheme": {
 					"light": "בהיר",
 					"system": "מערכת",
@@ -158,7 +152,6 @@
 				"expired": "תוקף האסימון פג לפני {ago}.",
 				"tokenCreatedSuccess": "הנה אסימון api החדש שלך: {token}",
 				"tokenCreatedNotSeeAgain": "לא תראה שוב אז לשמור במקום מבוטח!",
-				"selectAll": "לסמן הכל",
 				"delete": {
 					"header": "מחיקת אסימון זה",
 					"text1": "בטוח שברצונך למחוק את האסימון ״{token}״?",
@@ -323,8 +316,7 @@
 			"default": "ברירת מחדל",
 			"month": "חודש",
 			"day": "יום",
-			"hour": "שעה",
-			"range": "טווח תאריכים"
+			"hour": "שעה"
 		},
 		"table": {
 			"title": "טבלה",
@@ -333,7 +325,6 @@
 		"kanban": {
 			"title": "קאנבאן",
 			"limit": "הגבלה: {limit}",
-			"noLimit": "לא נקבע",
 			"doneBucket": "דלי גמורים",
 			"doneBucketHint": "דלי גמורים נשמר בהצלחה.",
 			"doneBucketHintExtended": "כל המטלות המוכנסות לדלי הגמורים יסומנו אוטומטית כגמורים. כל המטלות המסומנות כגמורים מבחוץ יוזזו גם.",
@@ -399,16 +390,7 @@
 			"titlePlaceholder": "כותרת המסנן השמור מופיעה פה…",
 			"description": "תיאור",
 			"descriptionPlaceholder": "להוסיף תיאור למסנן כאן, הקש ׳/׳ לאופציות נוספות…",
-			"includeNulls": "להכליל מטלות בלי ערך קבוע",
-			"requireAll": "לחייב כל המסננים להיות חיוביים כדי שמטלה תופיע",
-			"showDoneTasks": "הצג מטלות גמורות",
-			"sortAlphabetically": "מיון אלפביתי",
-			"enablePriority": "לאפשר סינון לפי עדיפות",
-			"enablePercentDone": "לאפשר סינון לפי התקדמות",
-			"dueDateRange": "טווח תאריכי יעד",
-			"startDateRange": "טווח תאריכי התחלה",
-			"endDateRange": "טווח תאריכי סיום",
-			"reminderRange": "טווח תאריכי תזכורות"
+			"includeNulls": "להכליל מטלות בלי ערך קבוע"
 		},
 		"create": {
 			"title": "מסנן שמור חדש",
@@ -426,7 +408,6 @@
 			"success": "המסנן נשמר בהצלחה."
 		},
 		"query": {
-			"title": "שאילתא",
 			"placeholder": "הכנס חיפוש או שאילתא מסנן…",
 			"help": {
 				"intro": "לסנן מטלות, ניתן להשתמש בתחביר שאילתא הדומה ל-SQL. שדות הניתנים לסינון כוללים:",
@@ -475,7 +456,6 @@
 	"migrate": {
 		"title": "ייבוא משירותים אחרים",
 		"titleService": "לייבוא הנתונים שלך מ-{name} ל-Vikunja",
-		"import": "לייבוא הנתונים שלך לתוך Vikunja",
 		"description": "הקלק על הלוגו של אחד משירותי צד שלישי למטה כדי להתחיל.",
 		"descriptionDo": "Vikunja תייבא כל הרשימות, מטלות, רשומות, תזכורות וקבצים שיש לך הרשאת גישה אליהם.",
 		"authorize": "הקש למטה כדי להרשות ל-Vikunja גישה לחשבון {name}.",
@@ -494,7 +474,6 @@
 		"manage": "ניהול תוויות",
 		"description": "הקש על תווית כדי לערוך אותה. ניתן לערוך כל התוויות שיצרת וניתן להשתמש בכל התוויות המשויכות למטלה בתוך פרויקט אליו יש לך הרשאת גישה.",
 		"newCTA": "אין לך כרגע תוויות כלשהן.",
-		"search": "לכתוב כאן לחפש תווית…",
 		"create": {
 			"header": "תווית חדשה",
 			"title": "יצירת תווית",
@@ -503,7 +482,6 @@
 		},
 		"edit": {
 			"header": "עריכת תווית",
-			"forbidden": "אין לך הרשאה לעריכת התווית כי אין לך בעלות עליו.",
 			"success": "התווית עודכנה בהצלחה."
 		},
 		"deleteSuccess": "התווית נמחקה בהצלחה.",
@@ -511,7 +489,6 @@
 			"title": "כותרת",
 			"titlePlaceholder": "כותרת התווית נכנסת כאן…",
 			"description": "תיאור",
-			"descriptionPlaceholder": "תיאור תווית",
 			"color": "צבע"
 		}
 	},
@@ -533,15 +510,12 @@
 		"delete": "מחיקה",
 		"confirm": "אישור",
 		"cancel": "ביטול",
-		"refresh": "ריענון",
 		"disable": "חסימה",
 		"copy": "העתקה",
 		"copyError": "העתקה נכשלה",
-		"search": "חיפוש",
 		"searchPlaceholder": "הקש כדי לחפש…",
 		"previous": "הקודם",
 		"next": "הבא",
-		"info": "מידע",
 		"create": "יצירה",
 		"doit": "לך על זה!",
 		"saving": "בשמירה…",
@@ -574,15 +548,12 @@
 		},
 		"editor": {
 			"edit": "עריכה",
-			"done": "הסתיים",
 			"heading1": "כותרת 1",
 			"heading1Tooltip": "כותרת קטע גדול.",
 			"heading2": "כותרת 2",
 			"heading2Tooltip": "כותרת קטע אמצעי.",
 			"heading3": "כותרת 3",
 			"heading3Tooltip": "כותרת קטע קטן יותר.",
-			"headingSmaller": "הקטנת כותרת",
-			"headingBigger": "הגדלת כותרת",
 			"bold": "מודגש",
 			"italic": "נטוי",
 			"underline": "קו תחתון",
@@ -591,17 +562,13 @@
 			"quoteTooltip": "לתפוס ציטוט.",
 			"bulletList": "רשימת תבליטים",
 			"bulletListTooltip": "ליצירת רשימת תבליטים פשוטה.",
-			"unorderedList": "רשימה לא ממוינת",
 			"orderedList": "רשימה ממוינת",
 			"orderedListTooltip": "יצירת רשימה עם מספור.",
-			"cleanBlock": "בלוק נקי",
 			"link": "לינק",
 			"image": "תמונה",
 			"imageTooltip": "העלאת תמונה מהמחשב שלך.",
 			"horizontalRule": "שורה רוחבית",
 			"horizontalRuleTooltip": "חילוק קטע.",
-			"sideBySide": "זה ליד זה",
-			"guide": "מדריך",
 			"text": "טקסט",
 			"textTooltip": "התחל לכתוב עם טקסט פשוט.",
 			"taskList": "רשימת מטלות",
@@ -705,9 +672,7 @@
 		}
 	},
 	"task": {
-		"task": "מטלה",
 		"new": "יצירת מטלה",
-		"delete": "מחיקת מטלה זו",
 		"createSuccess": "המטלה נוצרה בהצלחה.",
 		"addReminder": "הוספת תזכורת…",
 		"doneSuccess": "המטלה סומנה בהצלחה כגמורה.",
@@ -716,7 +681,6 @@
 		"checklistAllDone": "{total} מטלות",
 		"show": {
 			"titleCurrent": "מטלות עדכניות",
-			"titleDates": "מטלות מ-{from} ועד {to}",
 			"overdue": "הצג מטלות באיחור",
 			"fromuntil": "מטלות מ-{from} ועד {until}",
 			"select": "בחירת טווח תאריכים",
@@ -736,7 +700,6 @@
 			"deleteSuccess": "המטלה נמחקה בהצלחה.",
 			"belongsToProject": "מטלה זו שייכת לפרויקט ׳{project}׳",
 			"due": "תאריך יעד ב-{at}",
-			"closePopup": "סגירת חלון קופץ",
 			"organization": "שם ארגון",
 			"management": "ניהול",
 			"dateAndTime": "תאריך ושעה",
@@ -783,7 +746,6 @@
 			"doneAt": "הסתיים ב"
 		},
 		"subscription": {
-			"subscribedTaskThroughParentProject": "אין לך הרשאה לביטול מנוי כאן כי המנוי שלך למטלה הוא דרך הפרויקט שלה.",
 			"subscribedProject": "את/ה מנוי/ה לפרויקט הזה כעת ותקבל הודעות על שינויים.",
 			"notSubscribedProject": "אינך מנוי/ה לפרויקט ולא תקבל/י הודעות על שינויים.",
 			"subscribedTask": "את/ה מנוי/ה כעת למטלה הזו ותקבל/י הודעות על שינויים.",
@@ -804,7 +766,6 @@
 			"delete": "למחוק מצורף",
 			"deleteTooltip": "למחיקת מצורף זה",
 			"deleteText1": "בטוח שברצונך לבטל מצורף {filename}?",
-			"copyUrl": "העתק URL",
 			"copyUrlTooltip": "העתקת url של מצורף זה לשימוש בטקסט",
 			"successfullyChangedCoverImage": "תמונת שער שונה בהצלחה.",
 			"usedAsCover": "תמונת שער"
@@ -828,8 +789,7 @@
 			"1week": "שבוע אחד"
 		},
 		"description": {
-			"placeholder": "הכנסת תיאור, הקש ׳/׳ לעוד אפשרויות…",
-			"empty": "אין עדיין תיאור"
+			"placeholder": "הכנסת תיאור, הקש ׳/׳ לעוד אפשרויות…"
 		},
 		"assignee": {
 			"placeholder": "הכנס כדי לייחס משתמש…"
@@ -854,8 +814,6 @@
 			"hours": "שעות",
 			"days": "ימים",
 			"weeks": "שבועות",
-			"months": "חודשים",
-			"years": "שנים",
 			"invalidAmount": "נא להכניס יותר מאפס."
 		}
 	},

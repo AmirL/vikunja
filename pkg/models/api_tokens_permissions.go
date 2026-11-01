@@ -17,24 +17,43 @@
 package models
 
 import (
+	"code.vikunja.io/api/pkg/user"
 	"code.vikunja.io/api/pkg/web"
 	"xorm.io/xorm"
 )
 
 func (t *APIToken) CanDelete(s *xorm.Session, a web.Auth) (bool, error) {
+	caller, err := user.GetFromAuth(a)
+	if err != nil {
+		return false, err
+	}
+
 	token, err := GetAPITokenByID(s, t.ID)
 	if err != nil {
 		return false, err
 	}
 
-	if token.OwnerID != a.GetID() {
-		return false, nil
+	if token.OwnerID == caller.ID {
+		*t = *token
+		return true, nil
 	}
 
+	_, err = getOwnedBot(s, token.OwnerID, caller)
+	if user.IsErrUserDoesNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
 	*t = *token
 	return true, nil
 }
 
-func (t *APIToken) CanCreate(_ *xorm.Session, _ web.Auth) (bool, error) {
+func (t *APIToken) CanCreate(_ *xorm.Session, a web.Auth) (bool, error) {
+	// Ownership derives from a verified user principal, never a generic GetID();
+	// link shares (and any non-user) must not manage API tokens (GHSA-vvcv-vpph-h844).
+	if _, err := user.GetFromAuth(a); err != nil {
+		return false, err
+	}
 	return true, nil
 }

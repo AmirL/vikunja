@@ -20,15 +20,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"math"
 	"os"
 	"strconv"
 	"time"
 
 	"code.vikunja.io/api/pkg/config"
 	"code.vikunja.io/api/pkg/db"
+	"code.vikunja.io/api/pkg/events"
 	"code.vikunja.io/api/pkg/log"
-	"code.vikunja.io/api/pkg/metrics"
-	"code.vikunja.io/api/pkg/modules/keyvalue"
 
 	"code.vikunja.io/api/pkg/web"
 	"github.com/c2h5oh/datasize"
@@ -38,12 +39,12 @@ import (
 
 // File holds all information about a file
 type File struct {
-	ID   int64  `xorm:"bigint autoincr not null unique pk" json:"id"`
-	Name string `xorm:"text not null" json:"name"`
-	Mime string `xorm:"text null" json:"mime"`
-	Size uint64 `xorm:"bigint not null" json:"size"`
+	ID   int64  `xorm:"bigint autoincr not null unique pk" json:"id" readOnly:"true" doc:"The unique, numeric id of this file."`
+	Name string `xorm:"text not null" json:"name" readOnly:"true" doc:"The original name of the uploaded file."`
+	Mime string `xorm:"text null" json:"mime" readOnly:"true" doc:"The detected mime type of the file."`
+	Size uint64 `xorm:"bigint not null" json:"size" readOnly:"true" doc:"The size of the file in bytes."`
 
-	Created     time.Time `xorm:"created" json:"created"`
+	Created     time.Time `xorm:"created" json:"created" readOnly:"true" doc:"A timestamp when this file was uploaded."`
 	CreatedByID int64     `xorm:"bigint not null" json:"-"`
 
 	File io.ReadCloser `xorm:"-" json:"-"`
@@ -61,19 +62,35 @@ func (f *File) fileID() string {
 	return strconv.FormatInt(f.ID, 10)
 }
 
+// DeleteBlob removes a stored blob after its database row has been rolled back.
+func DeleteBlob(id int64) error {
+	return storage.Remove(strconv.FormatInt(id, 10))
+}
+
 // LoadFileByID returns a file by its ID
 func (f *File) LoadFileByID() (err error) {
 	f.File, err = storage.Open(f.fileID())
-	return
+	if err != nil {
+		// A db row without its blob is a broken install, not a server error.
+		if errors.Is(err, fs.ErrNotExist) {
+			return ErrFileDoesNotExist{FileID: f.ID}
+		}
+		return fmt.Errorf("failed to open file %d: %w", f.ID, err)
+	}
+	return nil
 }
 
-// LoadFileMetaByID loads everything about a file without loading the actual file
-func (f *File) LoadFileMetaByID() (err error) {
-	exists, err := x.Where("id = ?", f.ID).Get(f)
+// LoadFileMetaByID loads the file metadata using the caller's session — an engine
+// query under an open transaction needs a second pool connection and can deadlock the pool.
+func (f *File) LoadFileMetaByID(s *xorm.Session) (err error) {
+	exists, err := s.Where("id = ?", f.ID).Get(f)
+	if err != nil {
+		return err
+	}
 	if !exists {
 		return ErrFileDoesNotExist{FileID: f.ID}
 	}
-	return
+	return nil
 }
 
 // Create creates a new file from an FileHeader
@@ -114,15 +131,59 @@ func CreateWithMime(f io.ReadSeeker, realname string, realsize uint64, a web.Aut
 	return file, s.Commit()
 }
 
+// measureReaderSize returns the byte length of r and leaves r seeked to
+// 0, so the size we check matches what storage backends will write
+// (they also Seek(0, io.SeekStart) before reading).
+func measureReaderSize(r io.ReadSeeker) (uint64, error) {
+	if _, err := r.Seek(0, io.SeekStart); err != nil {
+		return 0, err
+	}
+	end, err := r.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := r.Seek(0, io.SeekStart); err != nil {
+		return 0, err
+	}
+	if end < 0 {
+		return 0, fmt.Errorf("reader end %d is negative", end)
+	}
+	return uint64(end), nil
+}
+
 func CreateWithMimeAndSession(s *xorm.Session, f io.ReadSeeker, realname string, realsize uint64, a web.Auth, mime string, checkFileSizeLimit bool) (file *File, err error) {
-	if realsize > config.GetMaxFileSizeInMBytes()*uint64(datasize.MB) && checkFileSizeLimit {
-		return nil, ErrFileIsTooLarge{Size: realsize}
+	// Authoritative size comes from the reader, not the caller: the
+	// migration import path accepts attacker-controlled metadata
+	// (GHSA-qh78-rvg3-cv54) and several other callers pass stale values.
+	measured, mErr := measureReaderSize(f)
+	if mErr != nil {
+		return nil, fmt.Errorf("failed to measure file size: %w", mErr)
+	}
+
+	if checkFileSizeLimit {
+		// Overflow-safe: exabyte-range configs would wrap uint64.
+		maxMB := config.GetMaxFileSizeInMBytes()
+		var maxBytes uint64
+		if maxMB > math.MaxUint64/uint64(datasize.MB) {
+			maxBytes = math.MaxUint64
+		} else {
+			maxBytes = maxMB * uint64(datasize.MB)
+		}
+		if measured > maxBytes {
+			return nil, ErrFileIsTooLarge{Size: measured}
+		}
+	}
+
+	// Surface buggy callers that lie about size.
+	if realsize != 0 && realsize != measured {
+		log.Debugf("files.Create: caller-supplied size %d does not match measured size %d for %q",
+			realsize, measured, realname)
 	}
 
 	// We first insert the file into the db to get it's ID
 	file = &File{
 		Name:        realname,
-		Size:        realsize,
+		Size:        measured,
 		CreatedByID: a.GetID(),
 		Mime:        mime,
 	}
@@ -134,12 +195,35 @@ func CreateWithMimeAndSession(s *xorm.Session, f io.ReadSeeker, realname string,
 
 	// Save the file to storage with its new ID as path
 	err = file.Save(f)
-	return
+	if err != nil {
+		// Callers may still commit the session, which would persist a blobless row.
+		if _, delErr := s.Where("id = ?", file.ID).Delete(&File{}); delErr != nil {
+			err = errors.Join(err, fmt.Errorf("failed to remove file row after save error: %w", delErr))
+		}
+		return nil, err
+	}
+	return file, nil
 }
 
 // Delete removes a file from the DB and the file system.
 // The caller is responsible for committing or rolling back the session.
-func (f *File) Delete(s *xorm.Session) (err error) {
+func (f *File) Delete(s *xorm.Session) error {
+	if err := f.deleteRow(s); err != nil {
+		return err
+	}
+	return f.removeBlob()
+}
+
+// The blob goes in events.DispatchPending(s), so a rolled back session keeps it.
+func (f *File) DeleteOnCommit(s *xorm.Session) error {
+	if err := f.deleteRow(s); err != nil {
+		return err
+	}
+	events.OnCommit(s, f.removeBlob)
+	return nil
+}
+
+func (f *File) deleteRow(s *xorm.Session) error {
 	deleted, err := s.Where("id = ?", f.ID).Delete(&File{})
 	if err != nil {
 		return err
@@ -147,8 +231,13 @@ func (f *File) Delete(s *xorm.Session) (err error) {
 	if deleted == 0 {
 		return ErrFileDoesNotExist{FileID: f.ID}
 	}
+	return nil
+}
 
-	err = storage.Remove(f.fileID())
+func (f *File) removeBlob() error {
+	err := storage.Remove(f.fileID())
+	// After the file, so SavePreview catches a preview stored in between.
+	f.removePreviews()
 	if err != nil {
 		var perr *os.PathError
 		if errors.As(err, &perr) {
@@ -160,7 +249,7 @@ func (f *File) Delete(s *xorm.Session) (err error) {
 		return err
 	}
 
-	return keyvalue.DecrBy(metrics.FilesCountKey, 1)
+	return nil
 }
 
 // Save saves a file to storage
@@ -169,5 +258,5 @@ func (f *File) Save(fcontent io.ReadSeeker) error {
 	if err != nil {
 		return fmt.Errorf("failed to save file: %w", err)
 	}
-	return keyvalue.IncrBy(metrics.FilesCountKey, 1)
+	return nil
 }

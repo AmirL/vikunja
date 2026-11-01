@@ -1,9 +1,7 @@
-import type {IBucket} from '@/modelTypes/IBucket'
-import type {IProject} from '@/modelTypes/IProject'
 
 const key = 'collapsedBuckets'
 
-export type CollapsedBuckets = {[id: IBucket['id']]: boolean}
+export type CollapsedBuckets = {[id: number]: boolean}
 
 function getAllState() {
 	const saved = localStorage.getItem(key)
@@ -13,12 +11,12 @@ function getAllState() {
 }
 
 export const saveCollapsedBucketState = (
-	projectId: IProject['id'],
+	projectId: number,
 	collapsedBuckets: CollapsedBuckets,
 ) => {
 	const state = getAllState()
 	state[projectId] = collapsedBuckets
-	for (const bucketId in state[projectId]) {
+	for (const bucketId of Object.keys(state[projectId] ?? {})) {
 		if (!state[projectId][bucketId]) {
 			delete state[projectId][bucketId]
 		}
@@ -26,7 +24,7 @@ export const saveCollapsedBucketState = (
 	localStorage.setItem(key, JSON.stringify(state))
 }
 
-export function getCollapsedBucketState(projectId : IProject['id']) {
+export function getCollapsedBucketState(projectId: number) {
 	const state = getAllState()
 	return typeof state[projectId] !== 'undefined'
 		? state[projectId]

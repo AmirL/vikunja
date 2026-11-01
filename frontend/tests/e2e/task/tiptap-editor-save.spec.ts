@@ -5,7 +5,6 @@ import {ProjectFactory} from '../../factories/project'
 test.describe('TipTap Editor Save', () => {
 	test.beforeEach(async ({authenticatedPage: page}) => {
 		await ProjectFactory.create(1)
-		await TaskFactory.truncate()
 	})
 
 	/**
@@ -59,7 +58,7 @@ test.describe('TipTap Editor Save', () => {
 		await saveButton.click()
 
 		// Wait for save confirmation
-		await expect(page.locator('.task-view .details.content.description h3 span.is-small.has-text-success')).toContainText('Saved!')
+		await expect(page.locator('.task-view .details.content.description h2 span.is-small.has-text-success')).toContainText('Saved!')
 
 		// Give time for mode transition and any async errors to surface
 		await page.waitForTimeout(2000)
@@ -135,7 +134,7 @@ test.describe('TipTap Editor Save', () => {
 			await saveButton.click()
 
 			// Wait for save confirmation
-			await expect(page.locator('.task-view .details.content.description h3 span.is-small.has-text-success')).toContainText('Saved!')
+			await expect(page.locator('.task-view .details.content.description h2 span.is-small.has-text-success')).toContainText('Saved!')
 
 			// Give time for mode transition
 			await page.waitForTimeout(2000)

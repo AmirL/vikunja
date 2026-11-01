@@ -28,11 +28,19 @@ func (share *LinkSharing) CanRead(s *xorm.Session, a web.Auth) (bool, int, error
 		return false, 0, nil
 	}
 
-	l, err := GetProjectByShareHash(s, share.Hash)
+	if share.ProjectID != 0 {
+		can, err := share.canDoLinkShare(s, a)
+		if err != nil || !can {
+			return false, 0, err
+		}
+		return true, int(PermissionAdmin), nil
+	}
+
+	project, err := GetProjectByShareHash(s, share.Hash)
 	if err != nil {
 		return false, 0, err
 	}
-	return l.CanRead(s, a)
+	return project.CanRead(s, a)
 }
 
 // CanDelete implements the delete permission check for a link share
@@ -50,21 +58,15 @@ func (share *LinkSharing) CanCreate(s *xorm.Session, a web.Auth) (bool, error) {
 	return share.canDoLinkShare(s, a)
 }
 
+// Not tier-based: the tier isn't bound on delete, so checking it would fail open.
 func (share *LinkSharing) canDoLinkShare(s *xorm.Session, a web.Auth) (bool, error) {
-	// Don't allow creating link shares if the user itself authenticated with a link share
 	if _, is := a.(*LinkSharing); is {
 		return false, nil
 	}
 
-	l, err := GetProjectSimpleByID(s, share.ProjectID)
+	p, err := GetProjectSimpleByID(s, share.ProjectID)
 	if err != nil {
 		return false, err
 	}
-
-	// Check if the user is admin when the link permission is admin
-	if share.Permission == PermissionAdmin {
-		return l.IsAdmin(s, a)
-	}
-
-	return l.CanWrite(s, a)
+	return p.IsAdmin(s, a)
 }

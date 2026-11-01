@@ -29,22 +29,22 @@ import (
 // Label represents a label
 type Label struct {
 	// The unique, numeric id of this label.
-	ID int64 `xorm:"bigint autoincr not null unique pk" json:"id" param:"label"`
+	ID int64 `xorm:"bigint autoincr not null unique pk" json:"id" param:"label" readOnly:"true" doc:"The unique, numeric id of this label."`
 	// The title of the label. You'll see this one on tasks associated with it.
-	Title string `xorm:"varchar(250) not null" json:"title" valid:"runelength(1|250)" minLength:"1" maxLength:"250"`
+	Title string `xorm:"varchar(250) not null" json:"title" valid:"runelength(1|250)" minLength:"1" maxLength:"250" doc:"The title of the label. You'll see this one on tasks associated with it."`
 	// The label description.
-	Description string `xorm:"longtext null" json:"description"`
+	Description string `xorm:"longtext null" json:"description" doc:"The label description."`
 	// The color this label has in hex format.
-	HexColor string `xorm:"varchar(6) null" json:"hex_color" valid:"runelength(0|7)" maxLength:"7"`
+	HexColor string `xorm:"varchar(6) null" json:"hex_color" valid:"hexcolor" maxLength:"7" doc:"The color this label has in hex format."`
 
 	CreatedByID int64 `xorm:"bigint not null" json:"-"`
 	// The user who created this label
-	CreatedBy *user.User `xorm:"-" json:"created_by"`
+	CreatedBy *user.User `xorm:"-" json:"created_by" readOnly:"true" doc:"The user who created this label."`
 
 	// A timestamp when this label was created. You cannot change this value.
-	Created time.Time `xorm:"created not null" json:"created"`
+	Created time.Time `xorm:"created not null" json:"created" readOnly:"true" doc:"A timestamp when this label was created. You cannot change this value."`
 	// A timestamp when this label was last updated. You cannot change this value.
-	Updated time.Time `xorm:"updated not null" json:"updated"`
+	Updated time.Time `xorm:"updated not null" json:"updated" readOnly:"true" doc:"A timestamp when this label was last updated. You cannot change this value."`
 
 	web.CRUDable    `xorm:"-" json:"-"`
 	web.Permissions `xorm:"-" json:"-"`
@@ -131,6 +131,12 @@ func (l *Label) Update(s *xorm.Session, a web.Auth) (err error) {
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /labels/{id} [delete]
 func (l *Label) Delete(s *xorm.Session, _ web.Auth) (err error) {
+	// No FK cascade in the schema, so the associations must go explicitly.
+	_, err = s.Where("label_id = ?", l.ID).Delete(&LabelTask{})
+	if err != nil {
+		return err
+	}
+
 	_, err = s.ID(l.ID).Delete(&Label{})
 	return err
 }
@@ -149,15 +155,7 @@ func (l *Label) Delete(s *xorm.Session, _ web.Auth) (err error) {
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /labels [get]
 func (l *Label) ReadAll(s *xorm.Session, a web.Auth, search string, page int, perPage int) (ls interface{}, resultCount int, numberOfEntries int64, err error) {
-	return GetLabelsByTaskIDs(s, &LabelByTaskIDsOptions{
-		Search:              []string{search},
-		User:                a,
-		Page:                page,
-		PerPage:             perPage,
-		GetUnusedLabels:     true,
-		GroupByLabelIDsOnly: true,
-		GetForUser:          true,
-	})
+	return GetLabelsForUser(s, a, []string{search}, page, perPage)
 }
 
 // ReadOne gets one label

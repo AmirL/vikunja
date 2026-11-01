@@ -19,6 +19,7 @@ package unsplash
 import (
 	"bytes"
 	"context"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -40,6 +41,10 @@ import (
 	"code.vikunja.io/api/pkg/utils"
 	"code.vikunja.io/api/pkg/web"
 )
+
+func init() {
+	gob.Register(Photo{})
+}
 
 const (
 	unsplashAPIURL = `https://api.unsplash.com/`
@@ -97,14 +102,18 @@ type initialCollection struct {
 var emptySearchResult *initialCollection
 
 func doGet(url string, result ...interface{}) (err error) {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, unsplashAPIURL+url, nil)
+	// Keep the old 10s bound: the client's configured timeout defaults to 30s, which would
+	// stall the settings page this is fetched for.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, unsplashAPIURL+url, nil)
 	if err != nil {
 		return
 	}
 
 	req.Header.Add("Authorization", "Client-ID "+config.BackgroundsUnsplashAccessToken.GetString())
-	hc := http.Client{}
-	resp, err := hc.Do(req) // #nosec G704 -- URL is constructed from hardcoded Unsplash API base
+	resp, err := utils.NewSSRFSafeHTTPClient().Do(req) //nolint:gosec // SSRF protection is handled by the SSRF-safe client
 	if err != nil {
 		return
 	}
@@ -126,7 +135,7 @@ func getImageID(fullURL string) string {
 
 // Gets an unsplash photo either from cache or directly from the unsplash api
 func getUnsplashPhotoInfoByID(photoID string) (photo *Photo, err error) {
-	result, err := keyvalue.Remember(cachePrefix+photoID, func() (any, error) {
+	p, err := keyvalue.RememberValue(cachePrefix+photoID, func() (Photo, error) {
 		log.Debugf("Image information for unsplash photo %s not cached, requesting from unsplash...", photoID)
 		photo := &Photo{}
 		err := doGet("photos/"+photoID, photo)
@@ -135,8 +144,6 @@ func getUnsplashPhotoInfoByID(photoID string) (photo *Photo, err error) {
 	if err != nil {
 		return nil, err
 	}
-
-	p := result.(Photo)
 
 	return &p, nil
 }
@@ -373,9 +380,12 @@ func pingbackByPhotoID(photoID string) {
 	if err != nil {
 		log.Errorf("Unsplash Pingback Failed: %s", err.Error())
 	}
-	_, err = utils.NewSSRFSafeHTTPClient().Do(req) //nolint:gosec // SSRF protection is handled by the SSRF-safe client
+	resp, err := utils.NewSSRFSafeHTTPClient().Do(req) //nolint:gosec // SSRF protection is handled by the SSRF-safe client
 	if err != nil {
 		log.Errorf("Unsplash Pingback Failed: %s", err.Error())
+	} else {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
 	}
 	log.Debugf("Pinged unsplash for photo %s", photoID)
 }

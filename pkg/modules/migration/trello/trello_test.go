@@ -18,10 +18,13 @@ package trello
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
 
+	"code.vikunja.io/api/pkg/config"
 	"code.vikunja.io/api/pkg/files"
 	"code.vikunja.io/api/pkg/models"
 
@@ -76,10 +79,10 @@ func getTestBoard(t *testing.T) ([]*trello.Board, time.Time) {
 								},
 								{
 									ID:       "7cc71b16f0c7a57bed3c94e9",
-									Name:     "Website",
+									Name:     "Website <docs> & more",
 									IsUpload: false,
 									MimeType: "",
-									URL:      "https://vikunja.io",
+									URL:      `https://vikunja.io/?a=1&b="x"`,
 								},
 							},
 						},
@@ -101,7 +104,7 @@ func getTestBoard(t *testing.T) ([]*trello.Board, time.Time) {
 									},
 								},
 								{
-									Name: "Checkproject 2",
+									Name: "Checkproject <2> & more",
 									CheckItems: []trello.CheckItem{
 										{
 											State: "pending",
@@ -109,7 +112,7 @@ func getTestBoard(t *testing.T) ([]*trello.Board, time.Time) {
 										},
 										{
 											State: "pending",
-											Name:  "Another Pending Task",
+											Name:  "Another <b>Pending</b> & Task",
 										},
 									},
 								},
@@ -228,7 +231,6 @@ func getTestBoard(t *testing.T) ([]*trello.Board, time.Time) {
 			},
 		},
 	}
-	trelloData[0].Prefs.BackgroundImage = "https://vikunja.io/testimage.jpg" // Using an image which we are hosting, so it'll still be up
 
 	return trelloData, time1
 }
@@ -238,6 +240,23 @@ func TestConvertTrelloToVikunja(t *testing.T) {
 
 	exampleFile, err := os.ReadFile("../testimage.jpg")
 	require.NoError(t, err)
+
+	// Serve the attachment from a local test server so the test does not depend
+	// on an external host being reachable. The SSRF-safe client used by
+	// migration.DownloadFile rejects non-routable IPs by default, so allow them
+	// for the duration of this test.
+	prevAllowNonRoutable := config.OutgoingRequestsAllowNonRoutableIPs.GetBool()
+	config.OutgoingRequestsAllowNonRoutableIPs.Set("true")
+	t.Cleanup(func() {
+		config.OutgoingRequestsAllowNonRoutableIPs.Set(prevAllowNonRoutable)
+	})
+	attachmentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(exampleFile)
+	}))
+	t.Cleanup(attachmentServer.Close)
+
+	trelloData[0].Prefs.BackgroundImage = attachmentServer.URL + "/testimage.jpg"
+	trelloData[0].Lists[0].Cards[0].Attachments[0].URL = attachmentServer.URL + "/testimage.jpg"
 
 	expectedHierarchyOrg := map[string][]*models.ProjectWithTasksAndBuckets{
 		"orgid": {
@@ -250,7 +269,7 @@ func TestConvertTrelloToVikunja(t *testing.T) {
 			{
 				Project: models.Project{
 					ID:                    2,
-					ParentProjectID:       1,
+					ParentProjectID:       models.Ptr(int64(1)),
 					Title:                 "TestBoard",
 					Description:           "This is a description",
 					BackgroundInformation: bytes.NewBuffer(exampleFile),
@@ -270,7 +289,7 @@ func TestConvertTrelloToVikunja(t *testing.T) {
 						Task: models.Task{
 							Title: "Test Card 1",
 							Description: "<p>Card Description <strong>bold</strong></p>\n" +
-								"<p><a href=\"https://vikunja.io\">Website</a></p>\n",
+								"<p><a href=\"https://vikunja.io/?a=1&amp;b=&#34;x&#34;\">Website &lt;docs&gt; &amp; more</a></p>\n",
 							BucketID: 1,
 							DueDate:  time1,
 							Labels: []*models.Label{
@@ -306,11 +325,11 @@ func TestConvertTrelloToVikunja(t *testing.T) {
 <li data-checked="false" data-type="taskItem"><label><input type="checkbox"><span></span></label><div><p>Pending Task</p></div></li>
 <li data-checked="true" data-type="taskItem"><label><input type="checkbox" checked="checked"><span></span></label><div><p>Completed Task</p></div></li></ul>
 
-<h2> Checkproject 2</h2>
+<h2> Checkproject &lt;2&gt; &amp; more</h2>
 
 <ul data-type="taskList">
 <li data-checked="false" data-type="taskItem"><label><input type="checkbox"><span></span></label><div><p>Pending Task</p></div></li>
-<li data-checked="false" data-type="taskItem"><label><input type="checkbox"><span></span></label><div><p>Another Pending Task</p></div></li></ul>`,
+<li data-checked="false" data-type="taskItem"><label><input type="checkbox"><span></span></label><div><p>Another &lt;b&gt;Pending&lt;/b&gt; &amp; Task</p></div></li></ul>`,
 							BucketID: 1,
 						},
 					},
@@ -376,7 +395,7 @@ func TestConvertTrelloToVikunja(t *testing.T) {
 			{
 				Project: models.Project{
 					ID:              3,
-					ParentProjectID: 1,
+					ParentProjectID: models.Ptr(int64(1)),
 					Title:           "TestBoard Archived",
 					IsArchived:      true,
 				},
@@ -406,7 +425,7 @@ func TestConvertTrelloToVikunja(t *testing.T) {
 			{
 				Project: models.Project{
 					ID:              2,
-					ParentProjectID: 1,
+					ParentProjectID: models.Ptr(int64(1)),
 					Title:           "TestBoard 2",
 				},
 				Buckets: []*models.Bucket{
@@ -435,7 +454,7 @@ func TestConvertTrelloToVikunja(t *testing.T) {
 			{
 				Project: models.Project{
 					ID:              2,
-					ParentProjectID: 1,
+					ParentProjectID: models.Ptr(int64(1)),
 					Title:           "Personal Board",
 				},
 				Buckets: []*models.Bucket{
@@ -487,4 +506,29 @@ func TestCreateOrganizationMap(t *testing.T) {
 	if diff, equal := messagediff.PrettyDiff(organizationMap, expectedMap); !equal {
 		t.Errorf("converted organization map = %v,\nwant %v,\ndiff: %v", organizationMap, expectedMap, diff)
 	}
+}
+
+func TestDownloadAttachmentDropsTokenOnRedirect(t *testing.T) {
+	prevAllowNonRoutable := config.OutgoingRequestsAllowNonRoutableIPs.GetBool()
+	config.OutgoingRequestsAllowNonRoutableIPs.Set("true")
+	t.Cleanup(func() { config.OutgoingRequestsAllowNonRoutableIPs.Set(prevAllowNonRoutable) })
+
+	var redirectedAuth string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectedAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte("file"))
+	}))
+	t.Cleanup(target.Close)
+	var originAuth string
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originAuth = r.Header.Get("Authorization")
+		http.Redirect(w, r, target.URL+"/file", http.StatusFound)
+	}))
+	t.Cleanup(origin.Close)
+
+	buf, err := downloadAttachment(origin.URL, "secret-token")
+	require.NoError(t, err)
+	assert.Equal(t, "file", buf.String())
+	assert.Contains(t, originAuth, "secret-token")
+	assert.Empty(t, redirectedAuth, "the oauth token must not follow a redirect")
 }
