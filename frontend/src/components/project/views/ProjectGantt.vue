@@ -81,6 +81,7 @@ import FormField from '@/components/input/FormField.vue'
 
 import GanttChart from '@/components/gantt/GanttChart.vue'
 import {useGanttFilters} from '../../../views/project/helpers/useGanttFilters'
+import {useAutoRefresh} from '@/composables/useAutoRefresh'
 import {PERMISSIONS} from '@/constants/permissions'
 
 import type {DateISO} from '@/types/DateISO'
@@ -107,9 +108,13 @@ const {
 	setDefaultFilters,
 	tasks,
 	isLoading,
+	silentRefresh,
 	addTask,
 	updateTask,
 } = useGanttFilters(route, projectId, viewId)
+
+// Auto-refresh: silently poll for updates without visible reload
+useAutoRefresh(() => silentRefresh())
 
 const DEFAULT_DATE_RANGE_DAYS = 7
 

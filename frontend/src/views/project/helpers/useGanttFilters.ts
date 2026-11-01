@@ -141,6 +141,7 @@ export function useGanttFilters(
 	const {
 		tasks,
 		loadTasks,
+		silentRefresh,
 
 		isLoading,
 		addTask,
@@ -154,6 +155,7 @@ export function useGanttFilters(
 
 		tasks,
 		loadTasks,
+		silentRefresh,
 
 		isLoading,
 		addTask,

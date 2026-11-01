@@ -368,6 +368,7 @@ import AddTask from '@/components/tasks/AddTask.vue'
 
 import type {SortBy} from '@/composables/useTaskList'
 import {useTaskList} from '@/composables/useTaskList'
+import {useAutoRefresh} from '@/composables/useAutoRefresh'
 import type {TaskResponse} from '@/client/queries/tasks'
 import {useTableSort} from '@/composables/useTableSort'
 import {useDelayedLoading} from '@/composables/useDelayedLoading'
@@ -437,6 +438,9 @@ const {
 } = taskList
 const loading = useDelayedLoading(taskList.loading)
 const tasks: Ref<TaskResponse[]> = taskList.tasks
+
+// Auto-refresh: silently poll for updates without visible reload
+useAutoRefresh(() => taskList.silentRefresh())
 
 watch(
 	() => activeColumns.value,

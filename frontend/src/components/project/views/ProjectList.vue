@@ -114,6 +114,7 @@ import Pagination from '@/components/misc/Pagination.vue'
 import SortPopup from '@/components/project/partials/SortPopup.vue'
 
 import {useTaskList} from '@/composables/useTaskList'
+import {useAutoRefresh} from '@/composables/useAutoRefresh'
 import {useTaskDragToProject} from '@/composables/useTaskDragToProject'
 import {useCurrentProject} from '@/composables/useCurrentProject'
 import {shouldShowTaskInListView} from '@/composables/useTaskListFiltering'
@@ -150,6 +151,7 @@ const {
 	totalPages,
 	currentPage,
 	loadTasks,
+	silentRefresh,
 	params,
 	sortByParam,
 } = useTaskList(
@@ -161,6 +163,9 @@ const {
 		: ['subtasks', 'comment_count', 'is_unread'],
 )
 const showLoading = useDelayedLoading(loading)
+
+// Auto-refresh: silently poll for updates without visible reload
+useAutoRefresh(() => silentRefresh(), {interactionRefs: [drag]})
 
 const positionMutation = useUpdateTaskPositionMutation()
 

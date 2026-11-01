@@ -216,7 +216,9 @@ export function useTaskList(
 		// Scope updates before the restore decision is made; hold the fetch until then.
 		enabled: () => !pendingQueryRestore.value && projectViewId.value === syncedViewId.value,
 	})
-	const loading = query.isFetching
+	// A background poll refetch keeps the current list on screen without the loading state.
+	const silentRefreshing = ref(false)
+	const loading = computed(() => query.isFetching.value && !silentRefreshing.value)
 	const {tasks, totalPages} = query
 
 	watch(query.error, cause => {
@@ -228,12 +230,27 @@ export function useTaskList(
 		return tasks.value
 	}
 
+	/**
+	 * Re-fetches the current page in the background. Unchanged tasks keep their
+	 * object identity (query structural sharing), so there is no flash and scroll stays.
+	 */
+	async function silentRefresh() {
+		if (query.isFetching.value || !query.data.value) return
+		silentRefreshing.value = true
+		try {
+			await query.refetch()
+		} finally {
+			silentRefreshing.value = false
+		}
+	}
+
 	return {
 		tasks,
 		loading,
 		totalPages,
 		currentPage: page,
 		loadTasks,
+		silentRefresh,
 		params,
 		sortByParam: sortBy,
 	}

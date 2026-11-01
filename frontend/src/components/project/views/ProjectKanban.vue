@@ -314,6 +314,7 @@ import {PERMISSIONS as Permissions} from '@/constants/permissions'
 import {useQuickAddTask} from '@/composables/useQuickAddTask'
 import {useDelayedLoading} from '@/composables/useDelayedLoading'
 import {useTaskDragState} from '@/composables/useTaskDragState'
+import {useAutoRefresh} from '@/composables/useAutoRefresh'
 import {useAuthStore} from '@/stores/auth'
 
 import ProjectWrapper from '@/components/project/ProjectWrapper.vue'
@@ -513,6 +514,18 @@ function updateBucket(patch: BucketPatch, mutation = updateBucketMutation) {
 	})
 }
 const initialLoading = board.isLoading
+
+// Auto-refresh: silently poll for updates without visible reload
+const isNewTaskInputOpen = computed(() => showNewTaskInput.value !== null)
+useAutoRefresh(
+	async () => {
+		if (board.isFetching.value || bucketPageMutation.isPending.value) return
+		await board.refetch()
+	},
+	{
+		interactionRefs: [drag, dragBucket, newTaskInputFocused, isNewTaskInputOpen, bucketTitleEditable],
+	},
+)
 const projectIdWithFallback = computed<number>(() => project.value?.id || projectId.value)
 
 const taskLoading = computed(() => quickAddLoading.value || positionMutation.isPending.value)

@@ -1,4 +1,4 @@
-import {computed, type Ref} from 'vue'
+import {computed, ref, type Ref} from 'vue'
 import type {Task} from '@/client/generated'
 import type {Filters} from '@/composables/useRouteFilters'
 import {useQuery} from '@tanstack/vue-query'
@@ -21,9 +21,21 @@ export function useGanttTaskList<F extends Filters>(
 	const tasks = computed(() => new Map((query.data.value ?? []).map(task => [task.id, task])))
 	const create = useCreateTaskMutation()
 	const update = useUpdateTaskMutation(true)
+	// A background poll refetch keeps the chart on screen without the loading state.
+	const silentRefreshing = ref(false)
+	async function silentRefresh() {
+		if (query.isFetching.value || !query.data.value) return
+		silentRefreshing.value = true
+		try {
+			await query.refetch()
+		} finally {
+			silentRefreshing.value = false
+		}
+	}
 	return {
-		tasks, isLoading: query.isFetching,
+		tasks, isLoading: computed(() => query.isFetching.value && !silentRefreshing.value),
 		loadTasks: async () => { await query.refetch() },
+		silentRefresh,
 		addTask: (task: Task) => create.mutateAsync({...task, project_id: filters.value.projectId}),
 		updateTask: async (task: Task) => {
 			const current = tasks.value.get(task.id!)
