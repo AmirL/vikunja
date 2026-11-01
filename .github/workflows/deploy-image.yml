@@ -1,11 +1,13 @@
 name: Deploy image
 
 # Builds the custom deploy image on a GitHub-hosted runner and pushes it to GHCR.
+# The VPS does not update by itself: it runs the image pinned by digest in
+# /root/vikunja/docker-compose.yml.
 on:
   workflow_dispatch:
   push:
     branches:
-      - amirl/deploy-upstream-20261101
+      - main
 
 permissions:
   contents: read
@@ -32,9 +34,11 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
-          tags: ghcr.io/amirl/vikunja-custom:upstream-20261101
+          tags: |
+            ghcr.io/amirl/vikunja-custom:main
+            ghcr.io/amirl/vikunja-custom:${{ github.sha }}
           build-args: |
-            RELEASE_VERSION=v2.7.1-upstream-20261101-${{ github.sha }}
+            RELEASE_VERSION=main-${{ github.sha }}
 
       - name: Image digest
         run: echo "digest=${{ steps.build.outputs.digest }}"
