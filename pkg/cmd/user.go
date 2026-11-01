@@ -25,8 +25,11 @@ import (
 	"time"
 
 	"code.vikunja.io/api/pkg/db"
+	"code.vikunja.io/api/pkg/events"
 	"code.vikunja.io/api/pkg/initialize"
+	"code.vikunja.io/api/pkg/license"
 	"code.vikunja.io/api/pkg/log"
+	"code.vikunja.io/api/pkg/mail"
 	"code.vikunja.io/api/pkg/models"
 	"code.vikunja.io/api/pkg/user"
 
@@ -48,6 +51,8 @@ var (
 	userFlagDisableUser           bool
 	userFlagDeleteNow             bool
 	userFlagDeleteConfirm         bool
+	userFlagMakeAdmin             bool
+	userFlagRemoveAdmin           bool
 )
 
 func init() {
@@ -81,8 +86,66 @@ func init() {
 	// Bypass confirm prompt
 	userDeleteCmd.Flags().BoolVarP(&userFlagDeleteConfirm, "confirm", "c", false, "Bypasses any prompts confirming the deletion request, use with caution!")
 
-	userCmd.AddCommand(userListCmd, userCreateCmd, userUpdateCmd, userResetPasswordCmd, userChangeStatusCmd, userDeleteCmd)
+	userSetAdminCmd.Flags().BoolVar(&userFlagMakeAdmin, "admin", false, "Promote the user to instance admin.")
+	userSetAdminCmd.Flags().BoolVar(&userFlagRemoveAdmin, "no-admin", false, "Revoke instance admin from the user.")
+	userSetAdminCmd.MarkFlagsMutuallyExclusive("admin", "no-admin")
+	userSetAdminCmd.MarkFlagsOneRequired("admin", "no-admin")
+
+	userCmd.AddCommand(userListCmd, userCreateCmd, userUpdateCmd, userResetPasswordCmd, userChangeStatusCmd, userDeleteCmd, userSetAdminCmd)
 	rootCmd.AddCommand(userCmd)
+}
+
+func setUserAdmin(s *xorm.Session, identifier string, value bool) error {
+	filter := &user.User{}
+	id, err := strconv.ParseInt(identifier, 10, 64)
+	if err != nil {
+		filter.Username = identifier
+	} else {
+		filter.ID = id
+	}
+	u, err := user.GetUserWithEmail(s, filter)
+	if err != nil && !user.IsErrUserStatusError(err) {
+		return err
+	}
+	if !value {
+		if err := user.GuardLastAdmin(s, u); err != nil {
+			return err
+		}
+	}
+	u.IsAdmin = value
+	_, err = s.ID(u.ID).Cols("is_admin").Update(u)
+	return err
+}
+
+var userSetAdminCmd = &cobra.Command{
+	Use:   "set-admin [username-or-id]",
+	Short: "Set or remove the instance-admin flag on a user.",
+	Args:  cobra.ExactArgs(1),
+	PreRun: func(_ *cobra.Command, _ []string) {
+		initialize.FullInit()
+	},
+	Run: func(_ *cobra.Command, args []string) {
+		// Refuse on a free instance; the is_admin bypass is gated by the admin-panel entitlement everywhere else.
+		if !license.IsFeatureEnabled(license.FeatureAdminPanel) {
+			log.Fatalf("The admin-panel license feature is not active; refusing to change the is_admin flag.")
+		}
+
+		s := db.NewSession()
+		defer s.Close()
+		value := userFlagMakeAdmin
+		if err := setUserAdmin(s, args[0], value); err != nil {
+			_ = s.Rollback()
+			log.Fatalf("Could not update admin flag: %s", err)
+		}
+		if err := s.Commit(); err != nil {
+			log.Fatalf("Could not commit: %s", err)
+		}
+		if value {
+			fmt.Printf("User %q is now an instance admin.\n", args[0])
+		} else {
+			fmt.Printf("User %q is no longer an instance admin.\n", args[0])
+		}
+	},
 }
 
 func getPasswordFromFlagOrInput() (pw string) {
@@ -127,6 +190,12 @@ func getUserFromArg(s *xorm.Session, arg string) *user.User {
 var userCmd = &cobra.Command{
 	Use:   "user",
 	Short: "Manage users locally through the cli.",
+	// Mail sending is async via the queue; without draining it the process would
+	// exit before notification mails (password reset, deletion request, email
+	// confirmation) reach the SMTP server.
+	PersistentPostRun: func(_ *cobra.Command, _ []string) {
+		mail.StopMailDaemon()
+	},
 }
 
 var userListCmd = &cobra.Command{
@@ -197,9 +266,10 @@ var userCreateCmd = &cobra.Command{
 	PreRun: func(_ *cobra.Command, _ []string) {
 		initialize.FullInit()
 	},
-	Run: func(_ *cobra.Command, _ []string) {
+	Run: func(cmd *cobra.Command, _ []string) {
 		s := db.NewSession()
 		defer s.Close()
+		defer events.CleanupPending(s)
 
 		u := &user.User{
 			Username: userFlagUsername,
@@ -226,6 +296,8 @@ var userCreateCmd = &cobra.Command{
 		if err := s.Commit(); err != nil {
 			log.Fatalf("Error saving everything: %s", err)
 		}
+
+		events.DispatchPending(cmd.Context(), s)
 
 		fmt.Printf("\nUser was created successfully.\n")
 	},
@@ -311,7 +383,7 @@ var userChangeStatusCmd = &cobra.Command{
 		initialize.FullInit()
 	},
 	Args: cobra.ExactArgs(1),
-	Run: func(_ *cobra.Command, args []string) {
+	Run: func(cmd *cobra.Command, args []string) {
 		s := db.NewSession()
 		defer s.Close()
 
@@ -329,15 +401,16 @@ var userChangeStatusCmd = &cobra.Command{
 				status = user.StatusActive
 			}
 		}
-		err := user.SetUserStatus(s, u, status)
-		if err != nil {
+		if err := models.ChangeUserStatus(s, nil, u, status); err != nil {
 			_ = s.Rollback()
-			log.Fatalf("Could not enable the user")
+			log.Fatalf("Could not change the user status: %s", err)
 		}
 
 		if err := s.Commit(); err != nil {
 			log.Fatalf("Error saving everything: %s", err)
 		}
+
+		events.DispatchPending(cmd.Context(), s)
 
 		fmt.Printf("User status successfully changed, status is now \"%s\"\n", status)
 	},
@@ -351,7 +424,7 @@ var userDeleteCmd = &cobra.Command{
 	PreRun: func(_ *cobra.Command, _ []string) {
 		initialize.FullInit()
 	},
-	Run: func(_ *cobra.Command, args []string) {
+	Run: func(cmd *cobra.Command, args []string) {
 		if userFlagDeleteNow && !userFlagDeleteConfirm {
 			fmt.Println("You requested to delete the user immediately. Are you sure?")
 			fmt.Println(`To confirm, please type "yes, I confirm" in all uppercase:`)
@@ -376,12 +449,20 @@ var userDeleteCmd = &cobra.Command{
 		u := getUserFromArg(s, args[0])
 
 		if userFlagDeleteNow {
+			if err := user.GuardLastAdmin(s, u); err != nil {
+				_ = s.Rollback()
+				log.Fatalf("Error removing the user: %s", err)
+			}
 			err := models.DeleteUser(s, u)
 			if err != nil {
 				_ = s.Rollback()
 				log.Fatalf("Error removing the user: %s", err)
 			}
 		} else {
+			if err := user.GuardLastAdmin(s, u); err != nil {
+				_ = s.Rollback()
+				log.Fatalf("Could not request user deletion: %s", err)
+			}
 			err := user.RequestDeletion(s, u)
 			if err != nil {
 				_ = s.Rollback()
@@ -392,6 +473,8 @@ var userDeleteCmd = &cobra.Command{
 		if err := s.Commit(); err != nil {
 			log.Fatalf("Error saving everything: %s", err)
 		}
+
+		events.DispatchPending(cmd.Context(), s)
 
 		if userFlagDeleteNow {
 			fmt.Println("User deleted successfully.")

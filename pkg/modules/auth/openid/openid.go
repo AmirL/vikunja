@@ -17,7 +17,6 @@
 package openid
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,13 +24,15 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"code.vikunja.io/api/pkg/db"
+	"code.vikunja.io/api/pkg/events"
 	"code.vikunja.io/api/pkg/log"
 	"code.vikunja.io/api/pkg/models"
 	"code.vikunja.io/api/pkg/modules/auth"
 	"code.vikunja.io/api/pkg/modules/avatar"
-	"code.vikunja.io/api/pkg/modules/avatar/upload"
+	"code.vikunja.io/api/pkg/modules/keyvalue"
 	"code.vikunja.io/api/pkg/user"
 	"code.vikunja.io/api/pkg/utils"
 
@@ -47,6 +48,10 @@ type Callback struct {
 	Code        string `query:"code" json:"code"`
 	Scope       string `query:"scope" json:"scope"`
 	RedirectURL string `json:"redirect_url"`
+	// TOTPPasscode is required when the resolved user has TOTP enabled.
+	// Clients must restart the OIDC flow and populate this field after
+	// receiving a 412 with error code 1017. See GHSA-8jvc-mcx6-r4cg.
+	TOTPPasscode string `json:"totp_passcode"`
 }
 
 // Provider is the structure of an OpenID Connect provider
@@ -63,12 +68,37 @@ type Provider struct {
 	ForceUserInfo       bool   `json:"force_user_info"`
 	RequireAvailability bool   `json:"-"`
 	ClientSecret        string `json:"-"`
-	openIDProvider      *oidc.Provider
-	Oauth2Config        *oauth2.Config `json:"-"`
+	// RP-Initiated Logout endpoint, cached at init so logout never fetches.
+	// Exported so it survives the gob keyvalue round-trip (gob skips unexported
+	// fields like openIDProvider); json:"-" keeps it out of /info.
+	EndSessionURL  string `json:"-"`
+	openIDProvider *oidc.Provider
+	Oauth2Config   *oauth2.Config `json:"-"`
+}
+
+// boolish decodes a JSON bool or the strings "true"/"false"/"1"/"0" — some
+// OIDC providers emit email_verified as a string.
+type boolish bool
+
+func (b *boolish) UnmarshalJSON(data []byte) error {
+	var raw any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	switch v := raw.(type) {
+	case bool:
+		*b = boolish(v)
+	case string:
+		*b = boolish(v == "true" || v == "1")
+	default:
+		*b = false
+	}
+	return nil
 }
 
 type claims struct {
 	Email              string                   `json:"email"`
+	EmailVerified      boolish                  `json:"email_verified"`
 	Name               string                   `json:"name"`
 	PreferredUsername  string                   `json:"preferred_username"`
 	Nickname           string                   `json:"nickname"`
@@ -84,7 +114,7 @@ func init() {
 func (p *Provider) setOicdProvider() (err error) {
 	err = utils.RetryWithBackoff(fmt.Sprintf("OpenID Connect provider '%s'", p.Name), func() error {
 		var providerErr error
-		p.openIDProvider, providerErr = oidc.NewProvider(context.Background(), p.OriginalAuthURL)
+		p.openIDProvider, providerErr = oidc.NewProvider(withHTTPClient(context.Background()), p.OriginalAuthURL)
 		return providerErr
 	})
 
@@ -93,6 +123,12 @@ func (p *Provider) setOicdProvider() (err error) {
 	}
 
 	return err
+}
+
+var httpClient = sync.OnceValue(utils.NewUnguardedHTTPClient)
+
+func withHTTPClient(ctx context.Context) context.Context {
+	return oidc.ClientContext(ctx, httpClient())
 }
 
 func (p *Provider) Issuer() (issuerURL string, err error) {
@@ -115,6 +151,38 @@ func (p *Provider) Issuer() (issuerURL string, err error) {
 	return iss.Issuer, nil
 }
 
+// enforceTOTPIfRequired mirrors the TOTP gate from pkg/routes/api/v1/login.go
+// for the OIDC flow. Returns nil when the user does not have TOTP enabled.
+// See GHSA-8jvc-mcx6-r4cg.
+func enforceTOTPIfRequired(s *xorm.Session, u *user.User, totpPasscode string) error {
+	totpEnabled, err := user.TOTPEnabledForUser(s, u)
+	if err != nil {
+		return err
+	}
+	if !totpEnabled {
+		return nil
+	}
+
+	if totpPasscode == "" {
+		return user.ErrInvalidTOTPPasscode{}
+	}
+
+	_, err = user.ValidateTOTPPasscode(s, &user.TOTPPasscode{
+		User:     u,
+		Passcode: totpPasscode,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Reset the counter so old failed attempts don't trip a later lockout.
+	if err := keyvalue.Del(u.GetFailedTOTPAttemptsKey()); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // HandleCallback handles the auth request callback after redirecting from the provider with an auth code
 // @Summary Authenticate a user with OpenID Connect
 // @Description After a redirect from the OpenID Connect provider to the frontend has been made with the authentication `code`, this endpoint can be used to obtain a jwt token for that user and thus log them in.
@@ -126,11 +194,16 @@ func (p *Provider) Issuer() (issuerURL string, err error) {
 // @Param callback body openid.Callback true "The openid callback"
 // @Param provider path int true "The OpenID Connect provider key as returned by the /info endpoint"
 // @Success 200 {object} auth.Token
+// @Failure 412 {object} models.Message "Invalid totp passcode."
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /auth/openid/{provider}/callback [post]
 func HandleCallback(c *echo.Context) error {
+	cb := &Callback{}
+	if err := c.Bind(cb); err != nil {
+		return &models.ErrOpenIDBadRequest{Message: "Bad data"}
+	}
 
-	provider, oauthToken, idToken, err := getProviderAndOidcTokens(c)
+	u, oidcData, err := AuthenticateCallback(c.Request().Context(), cb, c.Param("provider"))
 	if err != nil {
 		var detailedErr *models.ErrOpenIDBadRequestWithDetails
 		if errors.As(err, &detailedErr) {
@@ -142,47 +215,91 @@ func HandleCallback(c *echo.Context) error {
 		return err
 	}
 
-	cl, err := getClaims(provider, oauthToken, idToken)
+	// Create token
+	return auth.NewUserAuthTokenResponse(u, c, false, oidcData)
+}
+
+// AuthenticateCallback resolves an OpenID Connect callback to an authenticated
+// user: it exchanges the auth code, verifies the ID token, creates or updates the
+// matching local user, enforces the account-status and TOTP gates, and syncs the
+// user's external teams. It is the transport-agnostic core shared by the v1 echo
+// handler and the v2 Huma handler; the caller issues the auth token. The
+// ErrOpenIDBadRequestWithDetails error keeps its provider detail so v1 can render
+// its bespoke body and v2 can map it to RFC 9457.
+func AuthenticateCallback(ctx context.Context, cb *Callback, providerKey string) (*user.User, *models.SessionOIDCData, error) {
+	provider, oauthToken, idToken, rawIDToken, err := exchangeOidcTokens(ctx, cb, providerKey)
 	if err != nil {
-		return err
+		return nil, nil, err
+	}
+
+	// Stored so logout can replay it as id_token_hint in an RP-Initiated Logout.
+	oidcData := &models.SessionOIDCData{
+		IDToken:     rawIDToken,
+		ProviderKey: providerKey,
+	}
+
+	cl, err := getClaims(ctx, provider, oauthToken, idToken)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	s := db.NewSession()
 	defer s.Close()
+	// Discards events queued during a rolled-back transaction (e.g. user
+	// creation); a no-op once DispatchPending has run.
+	defer events.CleanupPending(s)
 
 	// Check if we have seen this user before
 	u, err := getOrCreateUser(s, cl, provider, idToken)
 	if err != nil {
 		_ = s.Rollback()
 		log.Errorf("Error creating new user for provider %s: %v", provider.Name, err)
-		return err
+		return nil, nil, err
 	}
 
-	if u.Status == user.StatusDisabled {
+	if err := user.CheckUserCanAuthenticate(u); err != nil {
 		_ = s.Rollback()
-		return &user.ErrAccountDisabled{UserID: u.ID}
+		return nil, nil, err
 	}
-	if u.Status == user.StatusAccountLocked {
-		_ = s.Rollback()
-		return &user.ErrAccountLocked{UserID: u.ID}
+
+	// Must run before team sync so a failed 2FA attempt cannot mutate team
+	// membership. Commit before HandleFailedTOTPAuth so the getOrCreateUser
+	// writes persist and the SQLite write lock is released — its dedicated
+	// session needs to acquire its own. See GHSA-fgfv-pv97-6cmj.
+	if err := enforceTOTPIfRequired(s, u, cb.TOTPPasscode); err != nil {
+		if commitErr := s.Commit(); commitErr != nil {
+			log.Errorf("Error committing session after failed OIDC TOTP attempt for user %d: %v", u.ID, commitErr)
+		} else {
+			// The user creation above was committed, so its events are real.
+			events.DispatchPending(ctx, s)
+		}
+		if user.IsErrInvalidTOTPPasscode(err) {
+			user.HandleFailedTOTPAuth(u)
+		}
+		return nil, nil, err
 	}
 
 	teamData := getTeamDataFromToken(cl.VikunjaGroups, provider)
 
 	err = models.SyncExternalTeamsForUser(s, u, teamData, idToken.Issuer, provider.Name)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	err = s.Commit()
 	if err != nil {
 		_ = s.Rollback()
 		log.Errorf("Error creating new team for provider %s: %v", provider.Name, err)
-		return err
+		return nil, nil, err
 	}
 
-	// Create token
-	return auth.NewUserAuthTokenResponse(u, c, false)
+	events.DispatchPending(ctx, s)
+
+	if cl.Picture != "" {
+		syncUserAvatarFromOpenID(ctx, u.ID, cl.Picture)
+	}
+
+	return u, oidcData, nil
 }
 
 func getTeamDataFromToken(groups []map[string]interface{}, provider *Provider) (teamData []*models.Team) {
@@ -240,39 +357,65 @@ func getTeamDataFromToken(groups []map[string]interface{}, provider *Provider) (
 	return teamData
 }
 
-// Download and store a user's avatar from an OpenID provider
-func syncUserAvatarFromOpenID(s *xorm.Session, u *user.User, pictureURL string) (err error) {
-	// Don't sync avatar if no picture URL is provided
-	if pictureURL == "" {
-		return fmt.Errorf("no picture URL provided")
+func resetOpenIDAvatar(s *xorm.Session, u *user.User) error {
+	if u.AvatarProvider != "openid" {
+		return nil
 	}
 
-	log.Debugf("Found avatar URL for user %s: %s", u.Username, pictureURL)
-
-	// Download avatar
-	avatarData, err := utils.DownloadImage(pictureURL)
+	u.AvatarProvider = "default"
+	_, err := s.Where("id = ?", u.ID).Cols("avatar_provider").Update(&user.User{AvatarProvider: "default"})
 	if err != nil {
-		return fmt.Errorf("error downloading avatar: %w", err)
+		return fmt.Errorf("error resetting avatar provider: %w", err)
 	}
-
-	// Process avatar, ensure 1:1 ratio
-	processedAvatar, err := utils.CropAvatarTo1x1(avatarData)
-	if err != nil {
-		return fmt.Errorf("error processing avatar: %w", err)
-	}
-
-	// Set avatar provider to openid
-	u.AvatarProvider = "openid"
-
-	// Store avatar and update user
-	err = upload.StoreAvatarFile(s, u, bytes.NewReader(processedAvatar))
-	if err != nil {
-		return fmt.Errorf("error storing avatar: %w", err)
-	}
-
 	avatar.FlushAllCaches(u)
-
 	return nil
+}
+
+func syncUserAvatarFromOpenID(ctx context.Context, userID int64, pictureURL string) {
+	log.Debugf("Found avatar URL for user %d: %s", userID, pictureURL)
+
+	avatar.SyncFromProviderAsync(ctx, userID, "openid", func(ctx context.Context) ([]byte, error) {
+		return utils.DownloadImage(ctx, pictureURL)
+	})
+}
+
+// fallbackSearchUsers builds the ordered list of local-user lookups used to link an OIDC
+// login to an existing account. With a usable email: each username candidate AND the
+// email, then the email alone. Without: each username candidate alone.
+func fallbackSearchUsers(cl *claims, provider *Provider, idToken *oidc.IDToken) []*user.User {
+	// Empty candidates are skipped: GetUserWithEmail ignores zero fields, so an empty
+	// username or email would degenerate to an issuer-only lookup and link an arbitrary
+	// local user.
+	var usernames []string
+	if provider.UsernameFallback {
+		// Subject first for IdPs where sub == username; preferred_username covers IdPs
+		// with an opaque sub (e.g. PocketID).
+		if idToken.Subject != "" {
+			usernames = append(usernames, idToken.Subject)
+		}
+		preferred := strings.ReplaceAll(cl.PreferredUsername, " ", "-")
+		if preferred != "" && preferred != idToken.Subject {
+			usernames = append(usernames, preferred)
+		}
+	}
+
+	// Only a verified email may link to an existing account — an unverified one lets an
+	// attacker asserting a victim's email take over their local account (GHSA-xv7q-fvmc-jx96).
+	// Note: mapping on email prevents auto-updating the user email.
+	email := ""
+	if provider.EmailFallback && bool(cl.EmailVerified) {
+		email = cl.Email
+	}
+
+	var searches []*user.User
+	for _, username := range usernames {
+		searches = append(searches, &user.User{Issuer: user.IssuerLocal, Username: username, Email: email})
+	}
+	if email != "" {
+		searches = append(searches, &user.User{Issuer: user.IssuerLocal, Email: email})
+	}
+
+	return searches
 }
 
 func getOrCreateUser(s *xorm.Session, cl *claims, provider *Provider, idToken *oidc.IDToken) (u *user.User, err error) {
@@ -300,34 +443,26 @@ func getOrCreateUser(s *xorm.Session, cl *claims, provider *Provider, idToken *o
 
 	if !alreadyCreatedFromIssuer && (provider.EmailFallback || provider.UsernameFallback) {
 
-		// try finding the user on fallback mappingproperties
+		// try finding the user on fallback mapping properties
+		for _, searchUser := range fallbackSearchUsers(cl, provider, idToken) {
+			u, err = user.GetUserWithEmail(s, searchUser)
+			if err != nil && !user.IsErrUserDoesNotExist(err) && !user.IsErrUserStatusError(err) {
+				return nil, err
+			}
+			fallbackMatchFound = err == nil || user.IsErrUserStatusError(err)
 
-		searchUser := &user.User{
-			Issuer: user.IssuerLocal,
+			// Same as above: disabled/locked user found via fallback — return early.
+			if fallbackMatchFound && user.IsErrUserStatusError(err) {
+				return u, nil
+			}
+			if fallbackMatchFound {
+				break
+			}
 		}
-		if provider.UsernameFallback {
-			// Match oidc subject on username as each is unique identifier in its own referential
-			// Discouraged if multiple account providers are used.
-			searchUser.Username = idToken.Subject
-		}
-		if provider.EmailFallback {
-			// Used alone, allow for someone to connect from various provider to the same account
-			// Discouraged for untrusted provider where someone can set email without verification
-			// Note : mapping on email prevent from auto-updating user email
-			searchUser.Email = cl.Email
-		}
+	}
 
-		// Check if the user exists for the given fallback matching options
-		u, err = user.GetUserWithEmail(s, searchUser)
-		if err != nil && !user.IsErrUserDoesNotExist(err) && !user.IsErrUserStatusError(err) {
-			return nil, err
-		}
-		fallbackMatchFound = err == nil || user.IsErrUserStatusError(err)
-
-		// Same as above: disabled/locked user found via fallback — return early.
-		if fallbackMatchFound && user.IsErrUserStatusError(err) {
-			return u, nil
-		}
+	if fallbackMatchFound && u.IsBot() {
+		return nil, &user.ErrAccountIsBot{UserID: u.ID}
 	}
 
 	if !alreadyCreatedFromIssuer && !fallbackMatchFound {
@@ -365,10 +500,11 @@ func getOrCreateUser(s *xorm.Session, cl *claims, provider *Provider, idToken *o
 		}
 	}
 
-	// Try sync avatar if available
-	err = syncUserAvatarFromOpenID(s, u, cl.Picture)
-	if err != nil {
-		log.Errorf("Error syncing avatar for user %s: %v", u.Username, err)
+	// A picture is synced by AuthenticateCallback once the login committed.
+	if cl.Picture == "" {
+		if err := resetOpenIDAvatar(s, u); err != nil {
+			log.Errorf("Error resetting avatar for user %s: %v", u.Username, err)
+		}
 	}
 
 	return u, nil
@@ -379,6 +515,7 @@ func getOrCreateUser(s *xorm.Session, cl *claims, provider *Provider, idToken *o
 func mergeClaims(cl *claims, cl2 *claims, forceUserInfo bool) error {
 	if (forceUserInfo && cl2.Email != "") || cl.Email == "" {
 		cl.Email = cl2.Email
+		cl.EmailVerified = cl2.EmailVerified
 	}
 
 	if (forceUserInfo && cl2.Name != "") || cl.Name == "" {
@@ -412,7 +549,7 @@ func mergeClaims(cl *claims, cl2 *claims, forceUserInfo bool) error {
 	return nil
 }
 
-func getClaims(provider *Provider, oauth2Token *oauth2.Token, idToken *oidc.IDToken) (*claims, error) {
+func getClaims(ctx context.Context, provider *Provider, oauth2Token *oauth2.Token, idToken *oidc.IDToken) (*claims, error) {
 
 	cl := &claims{}
 	err := idToken.Claims(cl)
@@ -422,7 +559,8 @@ func getClaims(provider *Provider, oauth2Token *oauth2.Token, idToken *oidc.IDTo
 	}
 
 	if provider.ForceUserInfo || cl.Email == "" || cl.Name == "" || cl.PreferredUsername == "" || cl.Picture == "" {
-		info, err := provider.openIDProvider.UserInfo(context.Background(), provider.Oauth2Config.TokenSource(context.Background(), oauth2Token))
+		ctx = withHTTPClient(ctx)
+		info, err := provider.openIDProvider.UserInfo(ctx, provider.Oauth2Config.TokenSource(ctx, oauth2Token))
 		if err != nil {
 			log.Errorf("Error getting userinfo for provider %s: %v", provider.Name, err)
 			return nil, err
@@ -447,65 +585,67 @@ func getClaims(provider *Provider, oauth2Token *oauth2.Token, idToken *oidc.IDTo
 	return cl, nil
 }
 
-func getProviderAndOidcTokens(c *echo.Context) (*Provider, *oauth2.Token, *oidc.IDToken, error) {
-
-	cb := &Callback{}
-	if err := c.Bind(cb); err != nil {
-		return nil, nil, nil, &models.ErrOpenIDBadRequest{Message: "Bad data"}
-	}
-
-	// Check if the provider exists
-	providerKey := c.Param("provider")
-	provider, err := GetProvider(providerKey)
+// exchangeOidcTokens resolves the provider, exchanges the callback's auth code,
+// and verifies the returned ID token. It takes an already-bound Callback so it
+// can be shared by the v1 echo handler (which binds from the request) and the v2
+// Huma handler (which binds via its typed body).
+func exchangeOidcTokens(ctx context.Context, cb *Callback, providerKey string) (*Provider, *oauth2.Token, *oidc.IDToken, string, error) {
+	provider, err := GetProvider(providerKey) //nolint:contextcheck // GetProvider is shared with context-less startup callers.
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, "", err
 	}
 	if provider == nil {
-		return nil, nil, nil, &models.ErrOpenIDBadRequest{Message: "Provider does not exist"}
+		return nil, nil, nil, "", &models.ErrOpenIDBadRequest{Message: "Provider does not exist"}
 	}
 
 	log.Debugf("Trying to authenticate user using provider: %s", provider.Key)
 
-	provider.Oauth2Config.RedirectURL = cb.RedirectURL
+	// Oauth2Config is shared with the cached provider and concurrent callbacks.
+	oauth2Config := *provider.Oauth2Config
+	oauth2Config.RedirectURL = cb.RedirectURL
+	provider.Oauth2Config = &oauth2Config
 	// Parse the access & ID token
-	oauth2Token, err := provider.Oauth2Config.Exchange(context.Background(), cb.Code)
+	oauth2Token, err := provider.Oauth2Config.Exchange(withHTTPClient(ctx), cb.Code)
 	if err != nil {
+		log.Debugf("Token exchange failed for provider %s using token_endpoint_auth_method %s", provider.Key, authStyleName(provider.Oauth2Config.Endpoint.AuthStyle))
+
 		var rerr *oauth2.RetrieveError
 		if errors.As(err, &rerr) {
 
 			details := make(map[string]interface{})
 			if err := json.Unmarshal(rerr.Body, &details); err != nil {
 				log.Errorf("Error unmarshalling token for provider %s: %v", provider.Name, err)
-				log.Debugf("Raw token value is %s", rerr.Body)
-				return nil, nil, nil, err
+				log.Debugf("Token endpoint error code=%q description=%q", rerr.ErrorCode, rerr.ErrorDescription)
+				return nil, nil, nil, "", err
 			}
 
 			log.Errorf("Error retrieving token: %s", err)
-			log.Debugf("Raw token value is %s", rerr.Body)
-			return nil, nil, nil, &models.ErrOpenIDBadRequestWithDetails{
+			log.Debugf("Token endpoint error code=%q description=%q", rerr.ErrorCode, rerr.ErrorDescription)
+			return nil, nil, nil, "", &models.ErrOpenIDBadRequestWithDetails{
 				Message: "Could not authenticate against third party.",
 				Details: details,
 			}
 		}
 
-		return nil, nil, nil, err
+		return nil, nil, nil, "", err
 	}
 
 	// Extract the ID Token from OAuth2 token.
 	rawIDToken, ok := oauth2Token.Extra("id_token").(string)
 	if !ok {
-		log.Debugf("Could not get id_token, raw token is %v", oauth2Token)
-		return nil, nil, nil, &models.ErrOpenIDBadRequest{Message: "Missing token"}
+		// Do not log oauth2Token itself: %v would print AccessToken/RefreshToken in clear text.
+		log.Debugf("Could not get id_token: response did not contain an id_token extra field (token_type=%s)", oauth2Token.TokenType)
+		return nil, nil, nil, "", &models.ErrOpenIDBadRequest{Message: "Missing token"}
 	}
 
 	verifier := provider.openIDProvider.Verifier(&oidc.Config{ClientID: provider.ClientID})
 
 	// Parse and verify ID Token payload.
-	idToken, err := verifier.Verify(context.Background(), rawIDToken)
+	idToken, err := verifier.Verify(ctx, rawIDToken)
 	if err != nil {
 		log.Errorf("Error verifying token for provider %s: %v", provider.Name, err)
-		return nil, nil, nil, err
+		return nil, nil, nil, "", err
 	}
 
-	return provider, oauth2Token, idToken, nil
+	return provider, oauth2Token, idToken, rawIDToken, nil
 }

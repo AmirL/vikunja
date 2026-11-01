@@ -2,9 +2,16 @@
 	<Modal
 		:enabled="active"
 		:overflow="isNewTaskCommand"
+		variant="top"
+		:aria-label="$t('quickActions.title')"
 		@close="closeQuickActions"
 	>
-		<div class="card quick-actions">
+		<div
+			ref="quickActionsCard"
+			class="card quick-actions"
+			:class="{'is-quick-add-mode': isQuickAddMode}"
+			:style="isQuickAddMode ? {maxHeight: quickEntryMaxHeight + 'px', overflowY: 'auto'} : undefined"
+		>
 			<div
 				class="action-input"
 				:class="{'has-active-cmd': selectedCmd !== null}"
@@ -17,20 +24,40 @@
 				</div>
 				<input
 					ref="searchInput"
-					v-model="query"
 					v-focus
+					:value="query"
 					class="input"
 					:class="{'is-loading': loading}"
 					:placeholder="placeholder"
+					@input="updateQuery"
 					@keyup="search"
 					@keydown.down.prevent="select(0, 0)"
 					@keyup.prevent.delete="unselectCmd"
-					@keyup.prevent.enter="doCmd"
-					@keyup.prevent.esc="closeQuickActions"
+					@keydown.prevent.enter="onEnter"
+					@keydown.prevent.esc="closeQuickActions"
 				>
+				<QuickAddMagic
+					v-if="isNewTaskCommand"
+				/>
 				<BaseButton
+					:aria-label="$t('misc.closeQuickActions')"
 					class="close"
 					@click="closeQuickActions"
+				>
+					<Icon icon="times" />
+				</BaseButton>
+			</div>
+
+			<div
+				v-if="isNewTaskCommand && prefillDescription !== null"
+				class="prefill-description"
+			>
+				<Icon icon="link" />
+				<span class="prefill-description-title">{{ prefillDescription.url || prefillDescription.description }}</span>
+				<BaseButton
+					:aria-label="$t('quickActions.removePrefillDescription')"
+					class="prefill-description-remove"
+					@click="removePrefillDescription"
 				>
 					<Icon icon="times" />
 				</BaseButton>
@@ -43,7 +70,13 @@
 				{{ hintText }}
 			</div>
 
-			<QuickAddMagic v-if="isNewTaskCommand" />
+			<div
+				class="is-sr-only"
+				role="status"
+				aria-live="polite"
+			>
+				{{ resultAnnouncement }}
+			</div>
 
 			<div
 				v-if="selectedCmd === null"
@@ -63,31 +96,36 @@
 							:key="key"
 							:ref="(el: Element | ComponentPublicInstance | null) => setResultRefs(el, k, key)"
 							class="result-item-button"
-							:class="{'is-strikethrough': (i as DoAction<ITask>)?.done}"
+							:class="{'is-strikethrough': isDone(i)}"
 							@keydown.up.prevent="select(k, key - 1)"
 							@keydown.down.prevent="select(k, key + 1)"
 							@click.prevent.stop="doAction(r.type, i)"
 							@keyup.prevent.enter="doAction(r.type, i)"
-							@keyup.prevent.esc="searchInput?.focus()"
+							@keydown.prevent.esc="searchInput?.focus()"
 						>
 							<template v-if="r.type === ACTION_TYPE.LABELS">
 								<XLabel :label="i" />
 							</template>
 							<template v-else-if="r.type === ACTION_TYPE.TASK">
 								<SingleTaskInlineReadonly
-									:task="i"
+									:task="i as ITask"
 									:show-project="true"
 								/>
+								<span
+									v-if="isDone(i)"
+									class="is-sr-only"
+								>{{ $t('task.attributes.done') }}</span>
 							</template>
 							<template v-else>
 								<span
-									v-if="i.id < -1"
+									v-if="isSavedFilterProject(i as Partial<ProjectResponse>)"
 									class="saved-filter-icon icon"
 								>
 									<Icon icon="filter" />
 								</span>
 								{{ i.title }}
 							</template>
+							<span class="is-sr-only">{{ r.typeLabel }}</span>
 						</BaseButton>
 					</div>
 				</div>
@@ -97,15 +135,16 @@
 </template>
 
 <script setup lang="ts">
-import {type ComponentPublicInstance, computed, ref, shallowReactive, watchEffect} from 'vue'
+import {type ComponentPublicInstance, computed, ref, watch, watchEffect, onBeforeUnmount} from 'vue'
+import {useQuickAddMode} from '@/composables/useQuickAddMode'
 import {useI18n} from 'vue-i18n'
 import {useRouter} from 'vue-router'
 
-import TaskService from '@/services/task'
-import TeamService from '@/services/team'
-
-import TeamModel from '@/models/team'
-import ProjectModel from '@/models/project'
+import {useTasks} from '@/composables/useTasks'
+import {useQueries} from '@tanstack/vue-query'
+import {teamSearchQuery, useCreateTeamMutation} from '@/client/queries/teams'
+import type {Team as ITeam} from '@/client/generated'
+import {refDebounced} from '@vueuse/core'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import QuickAddMagic from '@/components/tasks/partials/QuickAddMagic.vue'
@@ -113,31 +152,41 @@ import XLabel from '@/components/tasks/partials/Label.vue'
 import SingleTaskInlineReadonly from '@/components/tasks/partials/SingleTaskInlineReadonly.vue'
 
 import {useBaseStore} from '@/stores/base'
-import {useProjectStore} from '@/stores/projects'
-import {useLabelStore} from '@/stores/labels'
-import {useTaskStore} from '@/stores/tasks'
+import {useProjects} from '@/composables/useProjects'
+import {useCurrentProject} from '@/composables/useCurrentProject'
+import {useQuickAddTask} from '@/composables/useQuickAddTask'
 import {useAuthStore} from '@/stores/auth'
+import {useLabels} from '@/composables/useLabels'
+import {useDelayedLoading} from '@/composables/useDelayedLoading'
+import {quickAddPrefillDescription, type QuickAddPrefill} from '@/helpers/quickAddPrefill'
 
 import {getHistory} from '@/modules/projectHistory'
 import {parseTaskText, PREFIXES, PrefixMode} from '@/modules/quickAddMagic'
 import {success} from '@/message'
 
-import type {ITeam} from '@/modelTypes/ITeam'
-import type {ITask} from '@/modelTypes/ITask'
-import type {IProject} from '@/modelTypes/IProject'
-import type {IAbstract} from '@/modelTypes/IAbstract'
-import {isSavedFilter} from '@/services/savedFilter'
+import type {Task as ITask, Label} from '@/client/generated'
+import type {TaskFilterParams} from '@/client/queries/tasks'
+import {
+	createProjectDraft,
+	isSavedFilterProject,
+	useCreateProjectMutation,
+	type ProjectResponse,
+} from '@/client/queries/projects'
 
 const {t} = useI18n({useScope: 'global'})
 const router = useRouter()
 
 const baseStore = useBaseStore()
-const projectStore = useProjectStore()
-const labelStore = useLabelStore()
-const taskStore = useTaskStore()
+const projectList = useProjects()
+const createProjectMutation = useCreateProjectMutation()
+const {currentProject: selectedProject} = useCurrentProject()
+const {filterLabelsByQuery, getLabelsByExactTitles} = useLabels()
+const {createNewTask} = useQuickAddTask()
 const authStore = useAuthStore()
 
-type DoAction<Type> = { type: ACTION_TYPE } & Type
+const {isQuickAddMode} = useQuickAddMode()
+
+type QuickActionItem = Command | ITask | ProjectResponse | (ITeam & {title: string}) | Label
 
 enum ACTION_TYPE {
 	CMD = 'cmd',
@@ -162,12 +211,18 @@ enum SEARCH_MODE {
 
 const query = ref('')
 const selectedCmd = ref<Command | null>(null)
+const prefillDescription = ref<Pick<QuickAddPrefill, 'url' | 'description'> | null>(null)
 
-const foundTasks = ref<DoAction<ITask>[]>([])
-const taskService = shallowReactive(new TaskService())
+const taskSearchParams = ref<TaskFilterParams | null>(null)
+const taskQuery = useTasks(
+	() => ({params: taskSearchParams.value ?? {}}),
+	{enabled: () => taskSearchParams.value !== null},
+)
+const foundTasks = computed(() => taskSearchParams.value
+	? taskQuery.tasks.value
+	: [])
 
-const foundTeams = ref<ITeam[]>([])
-const teamService = shallowReactive(new TeamService())
+const createTeamMutation = useCreateTeamMutation()
 
 const active = computed(() => baseStore.quickActionsActive)
 
@@ -177,15 +232,56 @@ watchEffect(() => {
 	}
 })
 
+let focusRafId: number | null = null
+
+watchEffect(() => {
+	if (active.value) {
+		if (isQuickAddMode) {
+			selectedCmd.value = commands.value.newTask
+		}
+
+		// The input may not be focusable yet due to:
+		// 1. Modal mounts the <dialog> via v-if and then calls showModal() in a
+		//    follow-up flush, so v-focus fires while the dialog is still closed
+		//    and the focus() call is dropped.
+		// 2. In quick-add mode the Electron window isn't visible until
+		//    did-finish-load.
+		// Retry with rAF until focus actually lands on the input.
+		const tryFocus = () => {
+			if (!active.value) {
+				focusRafId = null
+				return
+			}
+			if (searchInput.value) {
+				searchInput.value.focus()
+				if (document.activeElement === searchInput.value) {
+					focusRafId = null
+					return
+				}
+			}
+			focusRafId = requestAnimationFrame(tryFocus)
+		}
+		focusRafId = requestAnimationFrame(tryFocus)
+	} else if (focusRafId !== null) {
+		cancelAnimationFrame(focusRafId)
+		focusRafId = null
+	}
+})
+
 function closeQuickActions() {
 	baseStore.setQuickActionsActive(false)
+}
+
+function removePrefillDescription() {
+	prefillDescription.value = null
+	searchInput.value?.focus()
 }
 
 const foundProjects = computed(() => {
 	const {project, text, labels, assignees} = parsedQuery.value
 
 	if (project !== null) {
-		return projectStore.searchProjectAndFilter(project ?? text)
+		return projectList.searchProjectAndFilter(project ?? text)
 			.filter(p => Boolean(p))
 	}
 
@@ -195,11 +291,11 @@ const foundProjects = computed(() => {
 
 	if (text === '') {
 		const history = getHistory()
-		return history.map((p) => projectStore.projects[p.id])
+		return history.map((p) => projectList.projects[p.id])
 			.filter(p => Boolean(p))
 	}
 
-	return projectStore.searchProjectAndFilter(project ?? text)
+	return projectList.searchProjectAndFilter(project ?? text)
 		.filter(p => Boolean(p))
 })
 
@@ -210,10 +306,10 @@ const foundLabels = computed(() => {
 	}
 
 	if (labels.length > 0) {
-		return labelStore.filterLabelsByQuery([], labels[0])
+		return filterLabelsByQuery([], labels[0])
 	}
 
-	return labelStore.filterLabelsByQuery([], text)
+	return filterLabelsByQuery([], text)
 })
 
 // FIXME: use fuzzysearch
@@ -224,7 +320,9 @@ const foundCommands = computed(() => availableCmds.value.filter((a) =>
 interface Result {
 	type: ACTION_TYPE
 	title: string
-	items: DoAction<IAbstract>
+	// singular, unlike the plural group heading in `title`: it is announced per item
+	typeLabel: string
+	items: QuickActionItem[]
 }
 
 const results = computed<Result[]>(() => {
@@ -232,36 +330,39 @@ const results = computed<Result[]>(() => {
 		{
 			type: ACTION_TYPE.CMD,
 			title: t('quickActions.commands'),
+			typeLabel: t('quickActions.resultTypes.command'),
 			items: foundCommands.value,
 		},
 		{
 			type: ACTION_TYPE.PROJECT,
 			title: t('quickActions.projects'),
+			typeLabel: t('quickActions.resultTypes.project'),
 			items: foundProjects.value,
 		},
 		{
 			type: ACTION_TYPE.TASK,
 			title: t('quickActions.tasks'),
+			typeLabel: t('quickActions.resultTypes.task'),
 			items: foundTasks.value,
 		},
 		{
 			type: ACTION_TYPE.LABELS,
 			title: t('quickActions.labels'),
+			typeLabel: t('quickActions.resultTypes.label'),
 			items: foundLabels.value,
 		},
 		{
 			type: ACTION_TYPE.TEAM,
 			title: t('quickActions.teams'),
+			typeLabel: t('quickActions.resultTypes.team'),
 			items: foundTeams.value,
 		},
 	].filter((i) => i.items.length > 0)
 })
 
-const loading = computed(() =>
-	taskService.loading ||
-	projectStore.isLoading ||
-	teamService.loading,
-)
+function isDone(item: QuickActionItem): boolean {
+	return 'done' in item && Boolean(item.done)
+}
 
 interface Command {
 	type: COMMAND_TYPE
@@ -293,12 +394,23 @@ const commands = computed<{ [key in COMMAND_TYPE]: Command }>(() => ({
 
 const placeholder = computed(() => selectedCmd.value?.placeholder || t('quickActions.placeholder'))
 
+watch(active, isActive => {
+	const prefill = baseStore.quickAddPrefill
+	if (!isActive || prefill === null) {
+		return
+	}
+	selectedCmd.value = commands.value.newTask
+	// Quoted so quick add magic leaves a page title like "Plan for tomorrow" alone.
+	query.value = prefill.title === '' ? '' : `"${prefill.title}"`
+	prefillDescription.value = prefill.url === '' && prefill.description === '' ? null : {url: prefill.url, description: prefill.description}
+}, {immediate: true})
+
 const currentProject = computed(() => {
-	if (Object.keys(baseStore.currentProject).length === 0 || isSavedFilter(baseStore.currentProject)) {
+	if (!selectedProject.value || isSavedFilterProject(selectedProject.value)) {
 		return null
 	}
-	
-	return baseStore.currentProject
+
+	return selectedProject.value
 })
 
 const hintText = computed(() => {
@@ -313,8 +425,8 @@ const hintText = computed(() => {
 		}
 	}
 	const prefixes =
-		PREFIXES[authStore.settings.frontendSettings.quickAddMagicMode] ?? PREFIXES[PrefixMode.Default]
-	return t('quickActions.hint', prefixes)
+		PREFIXES[authStore.settings.frontend_settings.quick_add_magic_mode] ?? PREFIXES[PrefixMode.Default]
+	return t('quickActions.hint', {...prefixes})
 })
 
 const availableCmds = computed(() => {
@@ -325,7 +437,7 @@ const availableCmds = computed(() => {
 	]
 })
 
-const parsedQuery = computed(() => parseTaskText(query.value, authStore.settings.frontendSettings.quickAddMagicMode))
+const parsedQuery = computed(() => parseTaskText(query.value, authStore.settings.frontend_settings.quick_add_magic_mode))
 
 const searchMode = computed(() => {
 	if (query.value === '') {
@@ -371,7 +483,7 @@ function searchTasks() {
 		searchMode.value !== SEARCH_MODE.TASKS &&
 		searchMode.value !== SEARCH_MODE.PROJECTS
 	) {
-		foundTasks.value = []
+		taskSearchParams.value = null
 		return
 	}
 
@@ -389,157 +501,216 @@ function searchTasks() {
 	let filter = ''
 
 	if (projectName !== null) {
-		const project = projectStore.findProjectByExactname(projectName)
-		console.log({project})
+		const project = projectList.findProjectByExactname(projectName)
 		if (project !== null) {
 			filter += ' project = ' + project.id
 		}
 	}
 
 	if (labels.length > 0) {
-		const labelIds = labelStore.getLabelsByExactTitles(labels).map((l) => l.id)
+		const labelIds = getLabelsByExactTitles(labels)
+			.map(label => label.id)
+			.filter((id): id is number => typeof id === 'number')
 		if (labelIds.length > 0) {
 			filter += 'labels in ' + labelIds.join(', ')
 		}
 	}
 
-	const params = {
-		s: text,
-		sort_by: 'done',
+	const params: Partial<TaskFilterParams> = {
+		q: text,
+		// undone tasks first, most relevant first within each group (relevance is
+		// only honored on backends that can score the search, see the API docs)
+		sort_by: ['done', 'relevance'],
 		filter,
 	}
 
 	taskSearchTimeout.value = setTimeout(async () => {
-		const r = await taskService.getAll({}, params) as DoAction<ITask>[]
-		foundTasks.value = r.map((t) => {
-			t.type = ACTION_TYPE.TASK
-			return t
-		})
+		taskSearchParams.value = params
 	}, 150)
 }
 
-const teamSearchTimeout = ref<ReturnType<typeof setTimeout> | null>(null)
+const teamSearches = refDebounced(computed(() => parsedQuery.value.assignees), 150)
+const teamQueries = useQueries({
+	queries: computed(() => active.value && query.value !== '' && selectedCmd.value === null &&
+		(searchMode.value === SEARCH_MODE.ALL || searchMode.value === SEARCH_MODE.TEAMS)
+		? teamSearches.value.map(search => teamSearchQuery(search)) : []),
+})
+const foundTeams = computed(() => teamQueries.value.flatMap(result => result.data ?? []).map(team => ({...team, title: team.name ?? ''})))
+const teamSearchLoading = computed(() => teamQueries.value.some(result => result.isFetching))
+const loading = useDelayedLoading(() =>
+	taskQuery.isFetching.value ||
+	projectList.isLoading ||
+	teamSearchLoading.value || createTeamMutation.isPending.value,
+)
 
-function searchTeams() {
-	if (
-		searchMode.value !== SEARCH_MODE.ALL &&
-		searchMode.value !== SEARCH_MODE.TEAMS
-	) {
-		foundTeams.value = []
-		return
-	}
-	if (query.value === '' || selectedCmd.value !== null) {
-		return
-	}
-	if (teamSearchTimeout.value !== null) {
-		clearTimeout(teamSearchTimeout.value)
-		teamSearchTimeout.value = null
-	}
-	const {assignees} = parsedQuery.value
-	teamSearchTimeout.value = setTimeout(async () => {
-		const teamSearchPromises = assignees.map((t) =>
-			teamService.getAll({}, {s: t}),
-		)
-		const teamsResult = await Promise.all(teamSearchPromises)
-		foundTeams.value = teamsResult.flat().map((team) => {
-			team.title = team.name
-			return team
-		})
-	}, 150)
+// Not v-model: it ignores input during IME composition, and Android keyboards
+// compose every word. The query would lag behind and the results re-render
+// under the finger once tapping one commits the composition.
+function updateQuery(event: Event) {
+	query.value = (event.target as HTMLInputElement).value
 }
 
 function search() {
 	searchTasks()
-	searchTeams()
 }
 
 const searchInput = ref<HTMLElement | null>(null)
+const quickActionsCard = ref<HTMLElement | null>(null)
 
-async function doAction(type: ACTION_TYPE, item: DoAction) {
+const QUICK_ENTRY_WIDTH = 680
+const quickEntryMaxHeight = Math.round(window.screen.availHeight * 0.7)
+let resizeObserver: ResizeObserver | null = null
+
+if (isQuickAddMode) {
+	watch(quickActionsCard, (el) => {
+		resizeObserver?.disconnect()
+		if (!el) return
+		resizeObserver = new ResizeObserver((entries) => {
+			for (const entry of entries) {
+				const height = Math.min(
+					Math.ceil(entry.borderBoxSize[0].blockSize),
+					quickEntryMaxHeight,
+				)
+				window.quickEntry?.resize?.(QUICK_ENTRY_WIDTH, height)
+			}
+		})
+		resizeObserver.observe(el)
+	})
+
+	onBeforeUnmount(() => {
+		resizeObserver?.disconnect()
+	})
+}
+
+async function doAction(type: ACTION_TYPE, item: QuickActionItem) {
 	switch (type) {
 		case ACTION_TYPE.PROJECT:
 			closeQuickActions()
-			await router.push({
-				name: 'project.index',
-				params: {projectId: (item as DoAction<IProject>).id},
-			})
+			if (!isQuickAddMode) {
+				await router.push({
+					name: 'project.index',
+					params: {projectId: (item as ProjectResponse).id},
+				})
+			}
 			break
 		case ACTION_TYPE.TASK:
+			if (isQuickAddMode) {
+				const channel = new BroadcastChannel('vikunja-task-updates')
+				channel.postMessage({type: 'task-created-open', taskId: (item as ITask).id})
+				channel.close()
+				window.quickEntry?.showMainWindow()
+			} else {
+				await router.push({
+					name: 'task.detail',
+					params: {id: (item as ITask).id},
+				})
+			}
 			closeQuickActions()
-			await router.push({
-				name: 'task.detail',
-				params: {id: (item as DoAction<ITask>).id},
-			})
 			break
 		case ACTION_TYPE.TEAM:
 			closeQuickActions()
-			await router.push({
-				name: 'teams.edit',
-				params: {id: (item as DoAction<ITeam>).id},
-			})
+			if (!isQuickAddMode) {
+				await router.push({
+					name: 'teams.edit',
+					params: {id: (item as ITeam).id},
+				})
+			}
 			break
 		case ACTION_TYPE.CMD:
 			query.value = ''
-			selectedCmd.value = item as DoAction<Command>
+			selectedCmd.value = item as Command
 			searchInput.value?.focus()
 			break
-		case ACTION_TYPE.LABELS:
-			if (/\s/.test(item.title)) {
-				query.value = '*"' + item.title + '"'
+		case ACTION_TYPE.LABELS: {
+			const title = item.title ?? ''
+			if (/\s/.test(title)) {
+				query.value = '*"' + title + '"'
 			} else {
-				query.value = '*' + item.title
+				query.value = '*' + title
 			}
 			searchInput.value?.focus()
 			searchTasks()
 			break
+		}
 	}
 }
 
+let openTaskAfterCreate = false
+
+function onEnter(event: KeyboardEvent) {
+	openTaskAfterCreate = event.ctrlKey || event.metaKey
+	doCmd()
+}
+
 async function doCmd() {
-	if (results.value.length === 1 && results.value[0].items.length === 1) {
+	if (selectedCmd.value === null && results.value.length === 1 && results.value[0].items.length === 1) {
 		const result = results.value[0]
 		doAction(result.type, result.items[0])
+		openTaskAfterCreate = false
 		return
 	}
 
 	if (selectedCmd.value === null || query.value === '') {
+		openTaskAfterCreate = false
 		return
 	}
 
-	closeQuickActions()
+	if (!isQuickAddMode) {
+		closeQuickActions()
+	}
 	await selectedCmd.value.action()
 }
 
 async function newTask() {
-	let projectId = authStore.settings.defaultProjectId
+	let projectId = authStore.settings.default_project_id
 	if (currentProject.value?.id && currentProject.value.id > 0) {
 		projectId = currentProject.value.id
 	}
-	const task = await taskStore.createNewTask({
+	const task = await createNewTask({
 		title: query.value,
-		projectId,
+		project_id: projectId,
+		description: prefillDescription.value === null ? undefined : quickAddPrefillDescription(prefillDescription.value),
 	})
 	success({message: t('task.createSuccess')})
+
+	if (isQuickAddMode) {
+		const channel = new BroadcastChannel('vikunja-task-updates')
+		const type = openTaskAfterCreate ? 'task-created-open' : 'task-created'
+		channel.postMessage({type, taskId: task.id})
+		channel.close()
+
+		if (openTaskAfterCreate) {
+			window.quickEntry?.showMainWindow()
+		}
+
+		closeQuickActions()
+		openTaskAfterCreate = false
+		return
+	}
+
 	await router.push({name: 'task.detail', params: {id: task.id}})
 }
 
 async function newProject() {
 	const parentProjectId = currentProject.value?.id ?? 0
-	await projectStore.createProject(new ProjectModel({
+	const created = await createProjectMutation.mutateAsync(createProjectDraft({
 		title: query.value,
-		parentProjectId: Math.max(parentProjectId, 0),
+		parent_project_id: Math.max(parentProjectId, 0),
 	}))
-	success({message: t('project.create.createdSuccess')})
+	await router.push({name: 'project.index', params: {projectId: created.id}})
 }
 
 async function newTeam() {
-	const newTeam = new TeamModel({name: query.value})
-	const team = await teamService.create(newTeam)
+	let team
+	try {
+		team = await createTeamMutation.mutateAsync({name: query.value})
+	} catch {
+		return
+	}
 	await router.push({
 		name: 'teams.edit',
 		params: {id: team.id},
 	})
-	success({message: t('team.create.success')})
 }
 
 type BaseButtonInstance = InstanceType<typeof BaseButton>
@@ -562,7 +733,7 @@ function select(parentIndex: number, index: number) {
 		parentIndex--
 		index = results.value[parentIndex].items.length - 1
 	}
-	let elems = resultRefs.value[parentIndex][index]
+	let elems: BaseButtonInstance | null | undefined = resultRefs.value[parentIndex][index]
 	if (results.value[parentIndex].items.length === index) {
 		elems = resultRefs.value[parentIndex + 1] ? resultRefs.value[parentIndex + 1][0] : undefined
 	}
@@ -589,18 +760,55 @@ function unselectCmd() {
 function reset() {
 	query.value = ''
 	selectedCmd.value = null
+	prefillDescription.value = null
 }
+
+const resultCount = computed(() => results.value.reduce((total, group) => total + group.items.length, 0))
+
+// Announce the result count to assistive technology, debounced so it doesn't
+// fire on every keystroke while the user is still typing.
+const resultAnnouncement = ref('')
+let announceTimeout: ReturnType<typeof setTimeout> | null = null
+watch(resultCount, count => {
+	if (!active.value || selectedCmd.value !== null) {
+		return
+	}
+	if (announceTimeout !== null) {
+		clearTimeout(announceTimeout)
+	}
+	announceTimeout = setTimeout(() => {
+		resultAnnouncement.value = t('quickActions.results', count)
+	}, 300)
+})
+watch(active, isActive => {
+	if (!isActive) {
+		resultAnnouncement.value = ''
+	}
+})
+onBeforeUnmount(() => {
+	if (announceTimeout !== null) {
+		clearTimeout(announceTimeout)
+	}
+})
 </script>
 
 <style lang="scss" scoped>
 .quick-actions {
+	// global Bulma .card styles are gone (ported into Card.vue, scoped),
+	// so this bare .card div needs its own card visuals
+	background-color: var(--white);
+	border-radius: $radius;
+	border: 1px solid var(--card-border-color);
+	box-shadow: var(--shadow-sm);
+	color: var(--text);
 	overflow: hidden;
 	justify-content: flex-start !important;
 
-	// FIXME: changed position should be an option of the modal
-	:deep(.modal-content) {
-		inset-block-start: 3rem;
-		transform: translate(-50%, 0);
+	&.is-quick-add-mode {
+		padding: 0;
+		margin: 0;
+		border: none;
+		box-shadow: none;
 	}
 }
 
@@ -611,7 +819,7 @@ function reset() {
 	.input {
 		border: 0;
 		font-size: 1.5rem;
-		
+
 		@media screen and (max-width: $tablet) {
 			padding-inline-end: .25rem;
 		}
@@ -624,7 +832,7 @@ function reset() {
 	.close {
 		padding: 0 1rem 0 .5rem;
 		font-size: 1.5rem;
-		
+
 		@media screen and (min-width: $tablet + 1) {
 			display: none;
 		}
@@ -636,6 +844,27 @@ function reset() {
 	margin-inline-start: .5rem;
 	background-color: var(--grey-100);
 	color: var(--grey-800);
+}
+
+.prefill-description {
+	display: flex;
+	align-items: center;
+	gap: .5rem;
+	padding: .25rem .5rem .5rem 1rem;
+	color: var(--grey-600);
+	font-size: .9rem;
+}
+
+.prefill-description-title {
+	flex: 1;
+	min-inline-size: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.prefill-description-remove {
+	padding: 0 .5rem;
 }
 
 .results {
@@ -675,14 +904,14 @@ function reset() {
 	&:active {
 		background: var(--grey-100);
 	}
-	
+
 	.saved-filter-icon {
 		font-size: .75rem;
 		inline-size: .75rem;
 		margin-inline-end: .25rem;
 		color: var(--grey-400)
 	}
-	
+
 	&:has(.saved-filter-icon) {
 		display: inline-flex;
 		align-items: center;

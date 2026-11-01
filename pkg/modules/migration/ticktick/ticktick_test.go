@@ -20,11 +20,16 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/csv"
+	"errors"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"code.vikunja.io/api/pkg/config"
+	"code.vikunja.io/api/pkg/modules/migration"
 
 	"code.vikunja.io/api/pkg/models"
 	"github.com/gocarina/gocsv"
@@ -104,8 +109,8 @@ func TestConvertTicktickTasksToVikunja(t *testing.T) {
 
 	assert.Len(t, vikunjaTasks, 3)
 
-	assert.Equal(t, vikunjaTasks[1].ParentProjectID, vikunjaTasks[0].ID)
-	assert.Equal(t, vikunjaTasks[2].ParentProjectID, vikunjaTasks[0].ID)
+	assert.Equal(t, vikunjaTasks[0].ID, *vikunjaTasks[1].ParentProjectID)
+	assert.Equal(t, vikunjaTasks[0].ID, *vikunjaTasks[2].ParentProjectID)
 
 	assert.Len(t, vikunjaTasks[1].Tasks, 4)
 	assert.Equal(t, vikunjaTasks[1].Title, tickTickTasks[0].ProjectName)
@@ -131,7 +136,7 @@ func TestConvertTicktickTasksToVikunja(t *testing.T) {
 	assert.Equal(t, models.RelatedTaskMap{
 		models.RelationKindParenttask: []*models.Task{
 			{
-				ID: tickTickTasks[1].ParentID,
+				ID: int64(tickTickTasks[1].ParentID),
 			},
 		},
 	}, vikunjaTasks[1].Tasks[1].RelatedTasks)
@@ -252,6 +257,84 @@ func TestConvertTicktickTasksDeeplyNested(t *testing.T) {
 	assert.Equal(t, "Root", projectTasks[0].Title)
 	assert.Equal(t, "Child", projectTasks[1].Title)
 	assert.Equal(t, "Grandchild", projectTasks[2].Title)
+}
+
+// TestSortParentsBeforeChildrenWithCycle guards against a regression where a
+// parentId cycle made place() recurse forever. That is a stack overflow, which
+// Go raises as a fatal error the recover middleware cannot catch, so it took
+// down the whole process instead of failing the one import request.
+func TestSortParentsBeforeChildrenWithCycle(t *testing.T) {
+	tests := []struct {
+		name           string
+		tasks          []*tickTickTask
+		expectedTitles []string
+	}{
+		{
+			name: "two tasks pointing at each other",
+			tasks: []*tickTickTask{
+				{TaskID: 1, ParentID: 2, ProjectName: "Project 1", Title: "Task A"},
+				{TaskID: 2, ParentID: 1, ProjectName: "Project 1", Title: "Task B"},
+			},
+			expectedTitles: []string{"Task A", "Task B"},
+		},
+		{
+			name: "task is its own parent",
+			tasks: []*tickTickTask{
+				{TaskID: 1, ParentID: 1, ProjectName: "Project 1", Title: "Own parent"},
+			},
+			expectedTitles: []string{"Own parent"},
+		},
+		{
+			name: "longer cycle",
+			tasks: []*tickTickTask{
+				{TaskID: 1, ParentID: 3, ProjectName: "Project 1", Title: "Task A"},
+				{TaskID: 2, ParentID: 1, ProjectName: "Project 1", Title: "Task B"},
+				{TaskID: 3, ParentID: 2, ProjectName: "Project 1", Title: "Task C"},
+			},
+			expectedTitles: []string{"Task A", "Task B", "Task C"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sorted := sortParentsBeforeChildren(tt.tasks)
+
+			titles := make([]string, 0, len(sorted))
+			for _, task := range sorted {
+				titles = append(titles, task.Title)
+			}
+			assert.ElementsMatch(t, tt.expectedTitles, titles, "every input task must be returned exactly once")
+
+			vikunjaTasks := convertTickTickToVikunja(tt.tasks)
+			convertedTitles := []string{}
+			for _, project := range vikunjaTasks {
+				for _, task := range project.Tasks {
+					convertedTitles = append(convertedTitles, task.Title)
+				}
+			}
+			assert.ElementsMatch(t, tt.expectedTitles, convertedTitles)
+		})
+	}
+}
+
+// TestSortParentsBeforeChildrenCycleDoesNotAffectOtherTasks makes sure breaking
+// a cycle still leaves the ordering of unrelated, acyclic tasks intact.
+func TestSortParentsBeforeChildrenCycleDoesNotAffectOtherTasks(t *testing.T) {
+	tasks := []*tickTickTask{
+		{TaskID: 1, ParentID: 2, ProjectName: "Project 1", Title: "Cycle A"},
+		{TaskID: 3, ParentID: 4, ProjectName: "Project 1", Title: "Child"},
+		{TaskID: 2, ParentID: 1, ProjectName: "Project 1", Title: "Cycle B"},
+		{TaskID: 4, ParentID: 0, ProjectName: "Project 1", Title: "Parent"},
+	}
+
+	sorted := sortParentsBeforeChildren(tasks)
+	require.Len(t, sorted, 4)
+
+	positions := make(map[string]int, len(sorted))
+	for i, task := range sorted {
+		positions[task.Title] = i
+	}
+	assert.Less(t, positions["Parent"], positions["Child"])
 }
 
 func TestLinesToSkipBeforeHeader(t *testing.T) {
@@ -768,5 +851,159 @@ func TestEmptyLabelHandlingWithRealCSV(t *testing.T) {
 		}
 
 		t.Logf("Successfully processed %d tasks with %d total labels, no empty labels created", len(tasks), totalLabels)
+	})
+}
+
+func TestTickTickPriorityParsing(t *testing.T) {
+	cases := []struct {
+		input    string
+		expected int64
+	}{
+		{"", 0},
+		{"0", 0},
+		{"1", 1},
+		{"3", 3},
+		{"5", 5},
+		{"p1", 1},
+		{"P2", 2},
+		{"p3", 3},
+		{" p5 ", 5},
+		{"garbage", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.input, func(t *testing.T) {
+			var p tickTickPriority
+			require.NoError(t, p.UnmarshalCSV(c.input))
+			assert.Equal(t, tickTickPriority(c.expected), p)
+		})
+	}
+}
+
+// TestNonNumericNumberColumns ensures that exports containing non-numeric values
+// in columns Vikunja parses as integers (Priority, taskId, parentId) do not fail
+// the whole import. See go-vikunja/vikunja#2822.
+func TestNonNumericNumberColumns(t *testing.T) {
+	file, err := os.Open("testdata_ticktick_invalid_numbers.csv")
+	require.NoError(t, err)
+	defer file.Close()
+
+	stat, err := file.Stat()
+	require.NoError(t, err)
+
+	lines, err := linesToSkipBeforeHeader(file, stat.Size())
+	require.NoError(t, err)
+
+	_, err = file.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+
+	dec, err := newLineSkipDecoder(file, lines)
+	require.NoError(t, err)
+	tasks := []*tickTickTask{}
+	err = gocsv.UnmarshalDecoder(dec, &tasks)
+	require.NoError(t, err, "non-numeric values in numeric columns should not fail the import")
+	require.Len(t, tasks, 2)
+
+	// "p1" in the Priority column is parsed as priority 1 instead of crashing.
+	assert.Equal(t, tickTickPriority(1), tasks[0].Priority)
+	assert.Equal(t, tickTickNumber(1), tasks[0].TaskID)
+
+	// Non-numeric taskId/parentId fall back to 0 as well.
+	assert.Equal(t, tickTickNumber(0), tasks[1].TaskID)
+	assert.Equal(t, tickTickNumber(0), tasks[1].ParentID)
+
+	// And the tasks still convert to the Vikunja structure, carrying the parsed
+	// priority over to the resulting task.
+	for _, task := range tasks {
+		task.Tags = strings.Split(task.TagsList, ", ")
+	}
+	vikunjaTasks := convertTickTickToVikunja(tasks)
+	require.Greater(t, len(vikunjaTasks), 0)
+
+	var priority int64
+	for _, project := range vikunjaTasks {
+		for _, task := range project.Tasks {
+			if task.Title == "Task with non-numeric priority" {
+				priority = task.Priority
+			}
+		}
+	}
+	assert.Equal(t, int64(1), priority)
+}
+
+// TestMultipleTasksWithMalformedIDsAreNotDropped guards against a regression
+// where collapsing several unparseable taskIds to 0 caused all but the first
+// zero-ID task to be silently dropped by sortParentsBeforeChildren.
+func TestMultipleTasksWithMalformedIDsAreNotDropped(t *testing.T) {
+	tasks := []*tickTickTask{
+		{TaskID: 0, ProjectName: "Project 1", Title: "First malformed"},
+		{TaskID: 0, ProjectName: "Project 1", Title: "Second malformed"},
+		{TaskID: 0, ProjectName: "Project 1", Title: "Third malformed"},
+	}
+
+	sorted := sortParentsBeforeChildren(tasks)
+	require.Len(t, sorted, 3, "no task with a zero ID should be dropped")
+
+	vikunjaTasks := convertTickTickToVikunja(tasks)
+	titles := []string{}
+	for _, project := range vikunjaTasks {
+		for _, task := range project.Tasks {
+			titles = append(titles, task.Title)
+		}
+	}
+	assert.ElementsMatch(t, []string{"First malformed", "Second malformed", "Third malformed"}, titles)
+}
+
+// TestTickTickRowLimit covers TickTick's bounded CSV decoder (GHSA-pqf9-h8g4-8gmh).
+func TestTickTickRowLimit(t *testing.T) {
+	config.MigrationMaxCSVRows.Set("3")
+	defer config.MigrationMaxCSVRows.Set("100000")
+
+	buildTickTickCSV := func(rows int) string {
+		content := "Date: 2024-01-01+0000\nVersion: 7.1\n" +
+			"\"Folder Name\",\"List Name\",\"Title\",\"Kind\",\"Tags\",\"Content\",\"Is Check list\",\"Start Date\",\"Due Date\",\"Reminder\",\"Repeat\",\"Priority\",\"Status\",\"Created Time\",\"Completed Time\",\"Order\",\"Timezone\",\"Is All Day\",\"Is Floating\",\"Column Name\",\"Column Order\",\"View Mode\",\"taskId\",\"parentId\"\n"
+		for i := 0; i < rows; i++ {
+			content += ",\"list\",\"task" + strconv.Itoa(i) + "\",\"TEXT\",\"\",\"\",\"N\",\"\",\"\",\"\",\"\",\"0\",\"0\",\"2022-10-09T15:09:48+0000\",\"\",\"-1099511627776\",\"\",\"true\",\"false\",,,\"list\",\"1\",\"\"\n"
+		}
+		return content
+	}
+
+	decode := func(t *testing.T, content string) ([]*tickTickTask, error) {
+		t.Helper()
+		lines, err := linesToSkipBeforeHeader(bytes.NewReader([]byte(content)), int64(len(content)))
+		require.NoError(t, err)
+		dec, err := newLineSkipDecoder(bytes.NewReader([]byte(content)), lines)
+		require.NoError(t, err)
+		tasks := []*tickTickTask{}
+		err = gocsv.UnmarshalDecoder(dec, &tasks)
+		return tasks, err
+	}
+
+	t.Run("exactly the limit passes", func(t *testing.T) {
+		tasks, err := decode(t, buildTickTickCSV(3))
+		require.NoError(t, err)
+		require.Len(t, tasks, 3)
+	})
+
+	t.Run("limit+1 rows fail with the typed error", func(t *testing.T) {
+		_, err := decode(t, buildTickTickCSV(4))
+		require.Error(t, err)
+		var limitErr *migration.ErrImportRowLimitExceeded
+		require.True(t, errors.As(err, &limitErr), "expected ErrImportRowLimitExceeded, got %v", err)
+	})
+
+	t.Run("multiline metadata still skips correctly", func(t *testing.T) {
+		content := "\uFEFF\"Date: 2025-11-25+0000\"\n" +
+			"\"Version: 7.1\"\n" +
+			"\"Status: \n" +
+			"0 Normal\n" +
+			"1 Completed\n" +
+			"2 Archived\"\n" +
+			"\"Folder Name\",\"List Name\",\"Title\",\"Kind\",\"Tags\",\"Content\",\"Is Check list\",\"Start Date\",\"Due Date\",\"Reminder\",\"Repeat\",\"Priority\",\"Status\",\"Created Time\",\"Completed Time\",\"Order\",\"Timezone\",\"Is All Day\",\"Is Floating\",\"Column Name\",\"Column Order\",\"View Mode\",\"taskId\",\"parentId\"\n" +
+			"\"dsx\",\"x\",\"this task repeats\",\"TEXT\",\"\",\"\",\"N\",\"\",\"\",\"\",\"\",\"0\",\"0\",\"2022-10-09T15:09:48+0000\",\"\",\"-1099511627776\",\"Europe/Berlin\",,\"false\",,,\"list\",\"2\",\"\"\n"
+
+		tasks, err := decode(t, content)
+		require.NoError(t, err)
+		require.Len(t, tasks, 1)
+		assert.Equal(t, "this task repeats", tasks[0].Title)
 	})
 }

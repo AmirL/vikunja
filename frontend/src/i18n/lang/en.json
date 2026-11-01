@@ -1,9 +1,36 @@
 {
   "home": {
     "welcomeNight": "Good Night {username}!",
+    "welcomeNightOwl": "Hello, night owl {username}",
+    "welcomeNightBurning": "Burning the midnight oil, {username}?",
+    "welcomeNightQuiet": "Quiet hours, {username}",
+    "welcomeNightLate": "It's late, {username}",
+    "welcomeNightMoonlit": "Moonlit planning, {username}?",
     "welcomeMorning": "Good Morning {username}!",
+    "welcomeMorningHey": "Hey {username}, ready to go?",
+    "welcomeMorningFresh": "Fresh start, {username}",
+    "welcomeMorningCoffee": "Coffee and tasks, {username}?",
+    "welcomeMorningRise": "Rise and plan, {username}",
+    "welcomeMorningBack": "Welcome back, {username}",
+    "welcomeMondayFresh": "Fresh week, {username}",
+    "welcomeTuesday": "Happy Tuesday, {username}",
+    "welcomeWednesdayMid": "Midweek already, {username}",
+    "welcomeThursday": "Almost there, {username}",
+    "welcomeFridayPush": "Friday push, {username}?",
+    "welcomeSaturday": "Weekend mode, {username}",
+    "welcomeSundaySession": "Sunday session, {username}?",
     "welcomeDay": "Hi {username}!",
+    "welcomeDayBack": "Back at it, {username}",
+    "welcomeDayFocus": "Let's focus, {username}",
+    "welcomeDayKeepGoing": "Keep going, {username}",
+    "welcomeDayWhatsNext": "What's next, {username}?",
+    "welcomeDayGood": "Good afternoon, {username}",
     "welcomeEvening": "Good Evening {username}!",
+    "welcomeEveningWind": "Winding down, {username}?",
+    "welcomeEveningReturns": "{username} returns",
+    "welcomeEveningWrap": "Time to wrap up, {username}?",
+    "welcomeEveningOneMore": "One more thing, {username}?",
+    "welcomeEveningStill": "Still at it, {username}?",
     "lastViewed": "Last viewed",
     "addToHomeScreen": "Add this app to your home screen for faster access and improved experience.",
     "goToOverview": "Go to overview",
@@ -25,6 +52,7 @@
     "loading": "Vikunja is loading…",
     "errorOccured": "An error occurred:",
     "checkApiUrl": "Please check if the api url is correct.",
+    "rateLimited": "The server received too many requests. Please wait a moment and reload the page.",
     "noApiUrlConfigured": "No API url was configured. Please set one below:"
   },
   "offline": {
@@ -39,12 +67,11 @@
       "email": "Email address",
       "emailPlaceholder": "e.g. frederic{'@'}vikunja.io",
       "password": "Password",
-      "passwordPlaceholder": "e.g. •••••••••••",
+      "passwordPlaceholder": "Your password",
       "forgotPassword": "Forgot your password?",
       "resetPassword": "Reset your password",
       "resetPasswordAction": "Send me a password reset link",
       "resetPasswordSuccess": "Check your inbox! You should have an email with instructions on how to reset your password.",
-      "passwordsDontMatch": "Passwords don't match",
       "confirmEmailSuccess": "You successfully confirmed your email! You can log in now.",
       "totpTitle": "Two Factor Authentication Code",
       "totpPlaceholder": "e.g. 123456",
@@ -54,7 +81,15 @@
       "authenticating": "Authenticating…",
       "openIdStateError": "State does not match, refusing to continue!",
       "openIdGeneralError": "An error occurred while authenticating against the third party.",
+      "openIdTotpRequired": "Your account requires two-factor authentication. Enter your TOTP code and sign in again.",
+      "openIdTotpSubmit": "Continue",
       "oauthMissingParams": "Missing required OAuth parameters: {params}",
+      "oauthRedirectedToApp": "You have been redirected to the app. You can close this tab now.",
+      "desktopTryDemo": "Try the Demo",
+      "desktopCustomServer": "Custom Server URL",
+      "desktopCustomServerDescription": "Enter the URL of your Vikunja server to get started.",
+      "desktopWaitingForAuth": "Waiting for authentication…",
+      "desktopOAuthError": "Authentication failed: {error}",
       "logout": "Logout",
       "emailInvalid": "Please enter a valid email address.",
       "usernameRequired": "Please provide a username.",
@@ -70,20 +105,45 @@
       "remember": "Stay logged in",
       "registrationDisabled": "Registration is disabled.",
       "passwordResetTokenMissing": "Password reset token is missing.",
-      "registrationFailed": "An error occurred during registration. Please check your input and try again."
+      "registrationFailed": "An error occurred during registration. Please check your input and try again.",
+      "registrationConfirmEmail": "Your account was created successfully! Please check your inbox and click the link in the confirmation email before logging in.",
+      "inviteInvalid": "This invite link is invalid or expired.",
+      "inviteLoadFailed": "Could not load this invitation. Please try again.",
+      "inviteTeams": "You will join: {teams}"
     },
     "settings": {
+      "bots": {
+        "title": "Bot Users",
+        "description": "Bot users are API-only users you own. They can be added to projects, assigned tasks, and authenticated with API tokens. They cannot log in interactively.",
+        "namePlaceholder": "My Assistant",
+        "create": "Create bot",
+        "createSuccess": "The bot \"{username}\" was created.",
+        "enable": "Enable",
+        "tokensInactive": "API tokens of a disabled bot are rejected. Enable the bot to create or use tokens.",
+        "badge": "Bot",
+        "badgeOwner": "Bot, created by {user}",
+        "delete": {
+          "header": "Delete this bot user",
+          "text1": "Are you sure you want to delete the bot user \"{username}\"?",
+          "text2": "This is irreversible. Any API tokens belonging to this bot will be revoked."
+        }
+      },
       "title": "Settings",
       "newPasswordTitle": "Update Your Password",
       "newPassword": "New password",
-      "newPasswordConfirm": "New password confirmation",
       "currentPassword": "Current password",
       "currentPasswordPlaceholder": "Your current password",
-      "passwordsDontMatch": "The new password and its confirmation don't match.",
       "passwordUpdateSuccess": "The password was successfully updated.",
       "updateEmailTitle": "Update Your Email Address",
       "updateEmailNew": "New email address",
-      "updateEmailSuccess": "Your email address was successfully updated. We've sent you a link to confirm it.",
+      "updateEmailSuccess": "Your email address was successfully updated.",
+      "updateEmailPending": "Your new email address {email} is waiting for confirmation. Until you click the link we sent there, your current address stays active.",
+      "updateEmailPendingSuccess": "We've sent a confirmation link to your new address. Your current address stays active until you confirm.",
+      "updateEmailResend": "Resend confirmation email",
+      "updateEmailResendSuccess": "We've sent you a new confirmation link.",
+      "updateEmailCancel": "Cancel change",
+      "updateEmailCancelSuccess": "The email change was cancelled.",
+      "updateEmailConfirmed": "Your new email address is confirmed.",
       "general": {
         "title": "General Settings",
         "name": "My Name",
@@ -100,12 +160,21 @@
         "weekStart": "Week starts on",
         "weekStartSunday": "Sunday",
         "weekStartMonday": "Monday",
+        "weekStartTuesday": "Tuesday",
+        "weekStartWednesday": "Wednesday",
+        "weekStartThursday": "Thursday",
+        "weekStartFriday": "Friday",
+        "weekStartSaturday": "Saturday",
         "language": "Language",
         "defaultProject": "Default project",
         "defaultView": "Default view",
         "timezone": "Time zone",
         "overdueTasksRemindersTime": "Overdue tasks reminder email time",
+        "quickAddDefaultReminders": "Default reminders for quick add",
+        "quickAddDefaultRemindersDescription": "These reminders will be added automatically to every task created via quick add magic that has a due date.",
+        "quickAddDefaultRemindersHint": "Add one or more reminders relative to the task's due date. Leave empty to disable.",
         "filterUsedOnOverview": "Saved filter used on the overview page",
+        "showLastViewed": "Show last viewed projects on the overview page",
         "minimumPriority": "Minimum visible task priority",
         "dateDisplay": "Date display format",
         "dateDisplayOptions": {
@@ -118,6 +187,9 @@
           "yyyy\/mm\/dd": "YYYY\/MM\/DD"
         },
         "timeFormat": "Time format",
+        "defaultDueTime": "Default due time",
+        "defaultDueTimeDescription": "Used as the default time when setting a task's due date without specifying a time, including date picker selections and Quick Add Magic.",
+        "timeTrackingDefaultStart": "Time tracking smart-fill start time",
         "timeFormatOptions": {
           "12h": "12-hour (AM/PM)",
           "24h": "24-hour (HH:mm)"
@@ -129,7 +201,14 @@
         "taskAndNotifications": "Projects & Tasks",
         "privacy": "Privacy",
         "localization": "Localization",
-        "appearance": "Appearance & Behavior"
+        "appearance": "Appearance & Behavior",
+        "desktop": "Desktop App"
+      },
+      "desktop": {
+        "quickEntryShortcut": "Quick Entry Shortcut",
+        "shortcutRecorderPlaceholder": "Click to set shortcut",
+        "shortcutRecorderRecording": "Press a key combination…",
+        "shortcutRecorderClear": "Clear shortcut"
       },
       "totp": {
         "title": "Two Factor Authentication",
@@ -149,15 +228,24 @@
       "caldav": {
         "title": "CalDAV",
         "howTo": "You can connect Vikunja to CalDAV clients to view and manage all your tasks from different clients. Enter this URL into your client:",
+        "urlLabel": "CalDAV URL",
         "more": "More information about CalDAV in Vikunja",
         "tokens": "CalDAV Tokens",
         "tokensHowTo": "For CalDAV authentication you can use either your normal account password or a dedicated CalDAV token.",
         "createToken": "Create a CalDAV token",
         "tokenCreated": "Here is your new token: {token}",
+        "deleteSuccess": "The CalDAV token was deleted successfully.",
         "wontSeeItAgain": "Write it down or save it securely — you will not be able to see it again.",
         "mustUseToken": "You need to create a CalDAV token to use CalDAV with any third-party client. Enter the token in the password field of your client.",
         "usernameIs": "Your username for CalDAV is: {0}",
         "apiTokenHint": "You can also use an API token with CalDAV permission. Create one in {link}."
+      },
+      "feeds": {
+        "title": "Atom Feed",
+        "howTo": "You can subscribe to your Vikunja notifications from any Atom-compatible feed reader. Use the following URL:",
+        "usernameIs": "Your username for the feed is: {0}",
+        "apiTokenHint": "Authenticate with an API token that has the {scope} permission. Create one in {link}.",
+        "tokenTitle": "Atom feed"
       },
       "avatar": {
         "title": "Avatar",
@@ -179,7 +267,6 @@
       },
       "appearance": {
         "title": "Color Scheme",
-        "setSuccess": "Saved change of color scheme to {colorScheme}",
         "colorScheme": {
           "light": "Light",
           "system": "System",
@@ -204,11 +291,11 @@
         "90d": "90 Days",
         "permissionExplanation": "Permissions allow you to scope what an api token is allowed to do.",
         "titleRequired": "The title is required",
+        "expiryInvalid": "Please pick an expiry date in the future.",
         "permissionRequired": "Please select at least one permission from the list.",
         "expired": "This token has expired {ago}.",
         "tokenCreatedSuccess": "Here is your new api token: {token}",
         "tokenCreatedNotSeeAgain": "Store it in a secure location, you won't see it again!",
-        "selectAll": "Select all",
         "presets": {
           "title": "Quick presets",
           "readOnly": "Read only",
@@ -241,6 +328,50 @@
         },
         "deleteSuccess": "Session revoked successfully. It may take up to 10 minutes for the session to fully expire.",
         "noOtherSessions": "No other active sessions."
+      },
+      "mcp": {
+        "intro": "Connect an AI assistant to your tasks, projects, and labels with the Model Context Protocol (MCP).",
+        "more": "More information about MCP in Vikunja",
+        "endpoint": "MCP endpoint",
+        "tokens": "MCP tokens",
+        "manageTokens": "Manage all API tokens",
+        "created": "Your MCP token is ready. Choose your client below to connect it.",
+        "client": "Which client do you use?",
+        "chooseClient": "Choose a client",
+        "clientHelp": "{client} setup guide",
+        "typedPreset": "Typed tools read + write",
+        "clients": {
+          "claudeCode": {
+            "command": "Run this command in a terminal: {value}",
+            "verify": "Start a Claude Code session and run /mcp to check the connection."
+          },
+          "codex": {
+            "environment": "Set the token in your shell environment: {value}",
+            "command": "Add the MCP server: {value}",
+            "config": "Alternatively, add this to ~/.codex/config.toml after setting the environment variable: {value}",
+            "note": "Start Codex from the shell where you set VIKUNJA_MCP_TOKEN. Set it again in each new shell, or store it securely in your shell environment."
+          },
+          "claudeDesktop": {
+            "open": "Open Customize → Connectors → Add custom connector. On Team or Enterprise, an owner adds it under Organization settings → Connectors.",
+            "url": "Name the connector Vikunja and enter this URL: {value}",
+            "auth": "Set Authentication to No sign-in.",
+            "header": "Under Request headers, choose authorization and paste this full value, including Bearer and the space, then add the connector: {value}",
+            "beta": "Request headers are in beta for a limited set of organizations. If this section is missing, connecting Vikunja is not available for your account yet."
+          },
+          "mistral": {
+            "open": "In the sidebar on the left open Context → Connectors → Add Connector → Add Custom Connector.",
+            "url": "Name the connector Vikunja, enter this URL, and select Connect: {value}",
+            "token": "Choose HTTP Bearer authentication and paste this token: {value}"
+          },
+          "chatgpt": {
+            "unavailable": "ChatGPT requires OAuth to connect to Vikunja. MCP OAuth is not supported yet, so this token cannot be used in ChatGPT."
+          },
+          "other": {
+            "title": "Other",
+            "url": "Use streamable HTTP transport with this endpoint: {value}",
+            "header": "Send this authorization header with every request: {value}"
+          }
+        }
       }
     },
     "deletion": {
@@ -283,6 +414,7 @@
     "shared": "Shared Projects",
     "noDescriptionAvailable": "No project description is available.",
     "inboxTitle": "Inbox",
+    "myOpenTasksFilterTitle": "My Open Tasks",
     "favorite": "Mark this project as favorite",
     "unfavorite": "Remove this project from favorites",
     "openSettingsMenu": "Open project settings menu",
@@ -311,7 +443,12 @@
       "poweredByUnsplash": "Powered by Unsplash",
       "loadMore": "Load more photos",
       "success": "The background has been set successfully!",
-      "removeSuccess": "The background has been removed successfully!"
+      "removeSuccess": "The background has been removed successfully!",
+      "searchError": "Loading backgrounds from Unsplash failed.",
+      "retry": "Try again",
+      "setBackground": "Set as project background",
+      "setBackgroundBy": "Set photo by {author} as project background",
+      "noPermission": "You need write access to this project to change its background."
     },
     "delete": {
       "title": "Delete \"{project}\"",
@@ -327,6 +464,7 @@
       "title": "Duplicate this project",
       "label": "Duplicate",
       "text": "Select a parent project which should hold the duplicated project:",
+      "shares": "Copy shares (users, teams and link shares) to the duplicate",
       "success": "The project was successfully duplicated."
     },
     "edit": {
@@ -369,11 +507,28 @@
         "shared": "Shared with these {type}",
         "you": "You",
         "notShared": "Not shared with any {type} yet.",
+        "remove": "Remove this {type}",
+        "sharable": "project",
         "removeHeader": "Remove a {type} from the {sharable}",
         "removeText": "Are you sure you want to remove this {sharable} from the {type}? This cannot be undone!",
+        "removeCleanupText": "Anyone who loses access to this project, or the projects under it, through this will also lose:",
         "removeSuccess": "The {sharable} was successfully removed from the {type}.",
         "addedSuccess": "The {type} was successfully added.",
-        "updatedSuccess": "The {type} was successfully added."
+        "updatedSuccess": "The {type} was successfully added.",
+        "search": "Search for a {type} to share this project with",
+        "permissionFor": "Permission for {sharable}"
+      },
+      "accessCleanup": {
+        "others": {
+          "assignments": "their task assignments",
+          "subscriptions": "their subscriptions to tasks and projects",
+          "webhooks": "webhooks they created"
+        },
+        "self": {
+          "assignments": "your task assignments",
+          "subscriptions": "your subscriptions to tasks and projects",
+          "webhooks": "webhooks you created"
+        }
       },
       "permission": {
         "title": "Permission",
@@ -395,7 +550,8 @@
       "addPlaceholder": "Add a task…",
       "empty": "This project is currently empty.",
       "newTaskCta": "Create a task.",
-      "editTask": "Edit Task"
+      "editTask": "Edit Task",
+      "sort": "Sort"
     },
     "gantt": {
       "title": "Gantt",
@@ -404,7 +560,6 @@
       "month": "Month",
       "day": "Day",
       "hour": "Hour",
-      "range": "Date Range",
       "chartLabel": "Project Gantt Chart",
       "taskBarsForRow": "Task bars for row {rowId}",
       "taskBarLabel": "Task: {task}. From {startDate} to {endDate}. {dateType}. Click to edit, drag to move.",
@@ -428,12 +583,12 @@
     },
     "table": {
       "title": "Table",
-      "columns": "Columns"
+      "columns": "Columns",
+      "sortBy": "Sort by {column}"
     },
     "kanban": {
       "title": "Kanban",
       "limit": "Limit: {limit}",
-      "noLimit": "Not Set",
       "doneBucket": "Done bucket",
       "doneBucketHint": "All tasks moved into this bucket will automatically marked as done.",
       "doneBucketHintExtended": "All tasks moved into the done bucket will be marked as done automatically. All tasks marked as done from elsewhere will be moved as well.",
@@ -454,7 +609,8 @@
       "bucketTitleSavedSuccess": "The bucket title has been saved successfully.",
       "bucketLimitSavedSuccess": "The bucket limit been saved successfully.",
       "collapse": "Collapse this bucket",
-      "bucketLimitReached": "You have reached the bucket limit. Remove tasks or increase the limit to add new tasks."
+      "bucketLimitReached": "You have reached the bucket limit. Remove tasks or increase the limit to add new tasks.",
+      "bucketOptions": "Bucket options"
     },
     "pseudo": {
       "favorites": {
@@ -492,6 +648,7 @@
       "createSuccess": "The view was created successfully.",
       "titleRequired": "Please provide a title.",
       "delete": "Delete this view",
+      "edit": "Edit this view",
       "deleteText": "Are you sure you want to remove this view? It will no longer be possible to use it to view tasks in this project. This action won't delete any tasks. This cannot be undone!",
       "deleteSuccess": "The view was deleted successfully.",
       "onlyAdminsCanEdit": "Only project admins can edit views.",
@@ -510,16 +667,7 @@
       "titlePlaceholder": "The saved filter title goes here…",
       "description": "Description",
       "descriptionPlaceholder": "Add a description for this filter here, hit '/' for more options…",
-      "includeNulls": "Include Tasks which don't have a value set",
-      "requireAll": "Require all filters to be true for a task to show up",
-      "showDoneTasks": "Show Done Tasks",
-      "sortAlphabetically": "Sort Alphabetically",
-      "enablePriority": "Enable Filter By Priority",
-      "enablePercentDone": "Enable Filter By Progress",
-      "dueDateRange": "Due Date Range",
-      "startDateRange": "Start Date Range",
-      "endDateRange": "End Date Range",
-      "reminderRange": "Reminder Date Range"
+      "includeNulls": "Include Tasks which don't have a value set"
     },
     "create": {
       "title": "New Saved Filter",
@@ -537,7 +685,7 @@
       "success": "The filter was saved successfully."
     },
     "query": {
-      "title": "Query",
+      "label": "Filter query",
       "placeholder": "Type a search or filter query…",
       "help": {
         "intro": "To filter tasks, you can use a query syntax similar to SQL. The available fields for filtering include:",
@@ -552,6 +700,7 @@
           "endDate": "The end date of the task",
           "doneAt": "The date and time when the task was completed",
           "assignees": "The assignees of the task",
+          "createdBy": "The user who created the task (matched by username)",
           "labels": "The labels associated with the task",
           "project": "The project the task belongs to (only available for saved filters, not on a project level)",
           "reminders": "The reminders of the task as a date field, will return all tasks with at least one reminder matching the query",
@@ -582,15 +731,38 @@
           "dueDatePast": "Matches tasks with a due date in the past",
           "undoneHighPriority": "Matches undone tasks with priority level 3 or higher",
           "assigneesIn": "Matches tasks assigned to either \"user1\" or \"user2\"",
+          "createdByEqual": "Matches tasks created by \"user1\"",
           "priorityOneOrTwoPastDue": "Matches tasks with priority level 1 or 2 and a due date in the past"
         }
       }
     }
   },
+  "sorting": {
+    "manually": "Manually",
+    "apply": "Apply sort",
+    "description": "Choose how tasks in this list are sorted. When sorting manually, you can drag and drop tasks to reorder them.",
+    "options": {
+      "titleAsc": "Title (A–Z)",
+      "titleDesc": "Title (Z–A)",
+      "priorityDesc": "Priority (Highest first)",
+      "priorityAsc": "Priority (Lowest first)",
+      "dueDateAsc": "Due date (Earliest first)",
+      "dueDateDesc": "Due date (Latest first)",
+      "startDateAsc": "Start date (Earliest first)",
+      "startDateDesc": "Start date (Latest first)",
+      "endDateAsc": "End date (Earliest first)",
+      "endDateDesc": "End date (Latest first)",
+      "percentDoneDesc": "% done (Most done first)",
+      "percentDoneAsc": "% done (Least done first)",
+      "createdDesc": "Created (Newest first)",
+      "createdAsc": "Created (Oldest first)",
+      "updatedDesc": "Updated (Newest first)",
+      "updatedAsc": "Updated (Oldest first)"
+    }
+  },
   "migrate": {
     "title": "Import from other services",
     "titleService": "Import your data from {name} into Vikunja",
-    "import": "Import your data into Vikunja",
     "description": "Click on the logo of one of the third-party services below to get started.",
     "descriptionDo": "Vikunja will import all lists, tasks, notes, reminders and files you have access to.",
     "authorize": "To authorize Vikunja to access your {name} Account, click the button below.",
@@ -602,14 +774,58 @@
     "importUpload": "To import data from {name} into Vikunja, click the button below to select a file.",
     "upload": "Upload file",
     "migrationStartedWillReciveEmail": "Vikunja will now import your lists/projects, tasks, notes, reminders and files from {service}. As this will take a while, we will send you an email once done. You can close this window now.",
-    "migrationInProgress": "A migration is currently in progress. Please wait until it is done."
+    "migrationFinished": "The import from {service} has finished. Everything it imported is now available in your projects.",
+    "migrationFailed": "The import from {service} failed: {reason}",
+    "failure": {
+      "reported": "The import from {service} failed. We have been notified about the error and are working on a fix.",
+      "interrupted": "The import from {service} was interrupted before it could finish. Please start it again.",
+      "credentials": "The credentials for {service} could not be verified. Please connect it again.",
+      "queue": "The import from {service} could not be queued. Please start it again.",
+      "upload": "The file you uploaded could not be stored. Please upload it again."
+    },
+    "migrationInProgress": "A migration is currently in progress. Please wait until it is done.",
+    "credentials": {
+      "description": "Enter the address of your {name} instance and how Vikunja should log in. Vikunja imports all projects and boards you have access to; the credentials are only used for this import and are not stored.",
+      "url": "{name} URL",
+      "authMethod": "Log in with",
+      "apiKey": "API key",
+      "apiKeyRequired": "Please enter an API key.",
+      "authPassword": "Username and password",
+      "start": "Start import"
+    },
+    "planka": {
+      "apiKeyHelp": "An API key must be created for your account by a Planka administrator. Copying the token from the browser does not work.",
+      "passwordHelp": "Only works for local Planka accounts without two-factor authentication that have logged in to Planka at least once. Accounts using single sign-on need an API key."
+    },
+    "csv": {
+      "description": "Import tasks from a CSV file with custom column mapping.",
+      "uploadDescription": "Select a CSV file to import. The file should contain task data with headers in the first row.",
+      "selectFile": "Select CSV file",
+      "columnMappingDescription": "Map each column in your CSV file to a task attribute. Vikunja has auto-detected the most likely mappings. The preview below will update automatically when you change settings.",
+      "parsingOptions": "Parsing Options",
+      "delimiter": "Delimiter",
+      "dateFormat": "Date Format",
+      "skipRows": "Skip Rows",
+      "mapColumns": "Map Columns",
+      "example": "e.g.",
+      "preview": "Preview",
+      "previewDescription": "Showing first 5 of {count} tasks that will be imported.",
+      "import": "Import Tasks",
+      "untitled": "Untitled Task",
+      "ignore": "Ignore",
+      "delimiters": {
+        "comma": "Comma (,)",
+        "semicolon": "Semicolon (;)",
+        "tab": "Tab",
+        "pipe": "Pipe (|)"
+      }
+    }
   },
   "label": {
     "title": "Labels",
     "manage": "Manage labels",
     "description": "Click on a label to edit it. You can edit all labels you created, you can use all labels which are associated with a task to whose project you have access.",
     "newCTA": "You currently do not have any labels.",
-    "search": "Type to search for a label…",
     "create": {
       "header": "New label",
       "title": "Create a label",
@@ -618,7 +834,6 @@
     },
     "edit": {
       "header": "Edit Label",
-      "forbidden": "You are not allowed to edit this label because you don't own it.",
       "success": "The label was successfully updated."
     },
     "deleteSuccess": "The label was successfully deleted.",
@@ -626,7 +841,6 @@
       "title": "Title",
       "titlePlaceholder": "The label title goes here…",
       "description": "Description",
-      "descriptionPlaceholder": "Label description",
       "color": "Color"
     }
   },
@@ -645,7 +859,12 @@
     "upcoming": "Upcoming",
     "settings": "Settings",
     "imprint": "Imprint",
-    "privacy": "Privacy Policy"
+    "privacy": "Privacy Policy",
+    "closeSidebar": "Close sidebar",
+    "home": "Vikunja home",
+    "toggleChildProjects": "Toggle sub-projects",
+    "main": "Main navigation",
+    "savedFilters": "Saved filters"
   },
   "misc": {
     "loading": "Loading…",
@@ -653,16 +872,13 @@
     "delete": "Delete",
     "confirm": "Confirm",
     "cancel": "Cancel",
-    "refresh": "Refresh",
     "disable": "Disable",
     "copy": "Copy to clipboard",
     "copyError": "Copy to clipboard failed",
-    "search": "Search",
     "searchPlaceholder": "Type to search…",
     "previous": "Previous",
     "next": "Next",
     "poweredBy": "Powered by Vikunja",
-    "info": "Info",
     "create": "Create",
     "doit": "Do it!",
     "saving": "Saving…",
@@ -680,9 +896,26 @@
     "createdBy": "Created by {0}",
     "actions": "Actions",
     "cannotBeUndone": "This cannot be undone!",
-    "avatarOfUser": "{user}'s profile image"
+    "avatarOfUser": "{user}'s profile image",
+    "closeBanner": "Close banner",
+    "closeDialog": "Close dialog",
+    "imagePreview": "Image preview",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "resetZoom": "Reset zoom",
+    "imageLoadFailed": "Failed to load image",
+    "videoPreview": "Video preview",
+    "pdfPreview": "PDF preview",
+    "videoLoadFailed": "This video cannot be played in your browser.",
+    "closeQuickActions": "Close quick actions",
+    "skipToContent": "Skip to main content",
+    "sortBy": "Sort by",
+    "dateRange": "Date range",
+    "notSet": "Not set",
+    "user": "User"
   },
   "input": {
+    "projectColor": "Project color",
     "resetColor": "Reset Color",
     "datepicker": {
       "today": "Today",
@@ -691,19 +924,35 @@
       "thisWeekend": "This Weekend",
       "laterThisWeek": "Later This Week",
       "nextWeek": "Next Week",
-      "chooseDate": "Choose a date"
+      "nextWeekend": "Next Weekend",
+      "endOfMonth": "End of Month",
+      "inAMonth": "In a Month",
+      "chooseDate": "Choose a date",
+      "quickSelect": "Quick select",
+      "clear": "Clear",
+      "noDate": "No date set",
+      "previousMonth": "Previous month",
+      "nextMonth": "Next month",
+      "time": {
+        "hours": "Hours",
+        "minutes": "Minutes",
+        "hourUp": "One hour later",
+        "hourDown": "One hour earlier",
+        "minuteUp": "Five minutes later",
+        "minuteDown": "Five minutes earlier"
+      },
+      "month": "Month",
+      "year": "Year"
     },
     "editor": {
       "edit": "Edit",
-      "done": "Done",
+      "label": "Rich text editor",
       "heading1": "Heading 1",
       "heading1Tooltip": "Big section heading.",
       "heading2": "Heading 2",
       "heading2Tooltip": "Medium section heading.",
       "heading3": "Heading 3",
       "heading3Tooltip": "Smaller section header.",
-      "headingSmaller": "Heading Smaller",
-      "headingBigger": "Heading Bigger",
       "bold": "Bold",
       "italic": "Italic",
       "strikethrough": "Strikethrough",
@@ -714,17 +963,18 @@
       "quoteTooltip": "Capture a quote.",
       "bulletList": "Bullet list",
       "bulletListTooltip": "Create a simple bullet list.",
-      "unorderedList": "Unordered list",
       "orderedList": "Ordered list",
       "orderedListTooltip": "Create a list with numbering.",
-      "cleanBlock": "Clean Block",
       "link": "Link",
+      "urlPlaceholder": "URL",
       "image": "Image",
       "imageTooltip": "Upload an image from your computer.",
+      "altText": "Alt text",
+      "altTextPlaceholder": "Describe this image",
+      "toolbarLabel": "Text formatting",
+      "more": "More formatting options",
       "horizontalRule": "Horizontal Rule",
       "horizontalRuleTooltip": "Divide a section.",
-      "sideBySide": "Side By Side",
-      "guide": "Guide",
       "text": "Text",
       "textTooltip": "Just start typing with plain text.",
       "taskList": "Task list",
@@ -749,11 +999,17 @@
         "toggleHeaderCell": "Toggle header cell",
         "mergeOrSplit": "Merge or split",
         "fixTables": "Fix tables"
+      },
+      "emoji": {
+        "empty": "No emoji found"
       }
     },
     "multiselect": {
       "createPlaceholder": "Create",
-      "selectPlaceholder": "Click or press enter to select"
+      "selectPlaceholder": "Click or press enter to select",
+      "removeItem": "Remove this item",
+      "clear": "Clear selection",
+      "moreResultsHint": "Showing the first {shown} of {total} matches. Refine your search to find the rest."
     },
     "datepickerRange": {
       "to": "To",
@@ -762,6 +1018,7 @@
       "date": "Date",
       "ranges": {
         "today": "Today",
+        "tomorrow": "Tomorrow",
         "thisWeek": "This Week",
         "restOfThisWeek": "The Rest of This Week",
         "nextWeek": "Next Week",
@@ -830,21 +1087,20 @@
     }
   },
   "task": {
-    "task": "Task",
     "new": "Create a task",
-    "delete": "Delete this task",
     "createSuccess": "The task was successfully created.",
+    "bulkCreateUnexpectedResponse": "The server returned an unexpected number of created tasks.",
     "addReminder": "Add a reminder…",
+    "removeReminder": "Remove this reminder",
     "doneSuccess": "The task was successfully marked as done.",
     "undoneSuccess": "The task was successfully un-marked as done.",
+    "readOnlyCheckbox": "You only have read access to this task and cannot mark it as done.",
     "movedToProject": "The task was moved to {project}.",
     "undo": "Undo",
-    "openDetail": "Open task detail view",
     "checklistTotal": "{checked} of {total} tasks",
     "checklistAllDone": "{total} tasks",
     "show": {
       "titleCurrent": "Current Tasks",
-      "titleDates": "Tasks from {from} until {to}",
       "noDates": "Show tasks without date",
       "overdue": "Show overdue tasks",
       "fromuntil": "Tasks from {from} until {until}",
@@ -858,19 +1114,30 @@
       "chooseDueDate": "Click here to set a due date",
       "chooseStartDate": "Click here to set a start date",
       "chooseEndDate": "Click here to set an end date",
+      "removeDueDate": "Remove due date",
+      "removeStartDate": "Remove start date",
+      "removeEndDate": "Remove end date",
+      "removeRepeat": "Remove repeat interval",
+      "removeAssignee": "Remove {user} as assignee",
       "move": "Move task to a different project",
       "done": "Mark task done!",
       "undone": "Mark as undone",
       "created": "Created {0} by {1}",
       "updated": "Updated {0}",
       "doneAt": "Done {0}",
+      "titleRequired": "The task title can't be empty.",
       "updateSuccess": "The task was saved successfully.",
       "deleteSuccess": "The task has been deleted successfully.",
       "duplicateSuccess": "The task was duplicated successfully.",
+      "noBucket": "No bucket",
+      "bucketSelectLabel": "Kanban bucket: {bucket}",
+      "bucketChangedSuccess": "The task bucket has been changed successfully.",
       "belongsToProject": "This task belongs to project '{project}'",
       "back": "Back to project",
       "due": "Due {at}",
-      "closePopup": "Close popup",
+      "closeTaskDetail": "Close task detail",
+      "title": "Task detail",
+      "markAsDone": "Mark '{task}' as done",
       "scrollToBottom": "Scroll to bottom",
       "organization": "Organization",
       "management": "Management",
@@ -891,18 +1158,14 @@
         "repeatAfter": "Set Repeating Interval",
         "percentDone": "Set Progress",
         "attachments": "Add Attachments",
+        "timeTracking": "Track time",
         "relatedTasks": "Add Relation",
         "moveProject": "Move",
         "duplicate": "Duplicate",
         "color": "Set Color",
         "delete": "Delete",
         "favorite": "Add to Favorites",
-        "unfavorite": "Remove from Favorites",
-        "bucket": "Set Bucket"
-      },
-      "bucket": {
-        "placeholder": "Select a bucket…",
-        "updateSuccess": "The task was moved to the selected bucket."
+        "unfavorite": "Remove from Favorites"
       }
     },
     "attributes": {
@@ -923,14 +1186,15 @@
       "repeat": "Repeat",
       "comment": "{count} comment | {count} comments",
       "commentCount": "Number of comments",
+      "attachment": "{count} attachment | {count} attachments",
       "startDate": "Start Date",
       "title": "Title",
       "updated": "Updated",
-      "doneAt": "Done At",
-      "bucket": "Bucket"
+      "doneAt": "Done At"
     },
     "subscription": {
-      "subscribedTaskThroughParentProject": "You can't unsubscribe here because you are subscribed to this task through its project.",
+      "subscribedTaskThroughProject": "You are subscribed to this task through its project. Unsubscribing here only stops notifications for this task.",
+      "subscribedProjectThroughParentProject": "You are subscribed to this project through a parent project. Unsubscribing here stops notifications for this project and everything in it.",
       "subscribedProject": "You are currently subscribed to this project and will receive notifications for changes.",
       "notSubscribedProject": "You are not subscribed to this project and won't receive notifications for changes.",
       "subscribedTask": "You are currently subscribed to this task and will receive notifications for changes.",
@@ -951,12 +1215,15 @@
       "delete": "Delete attachment",
       "deleteTooltip": "Delete this attachment",
       "deleteText1": "Are you sure you want to delete the attachment {filename}?",
-      "copyUrl": "Copy URL",
+      "deleteSuccess": "The attachment was successfully deleted.",
       "copyUrlTooltip": "Copy the url of this attachment for usage in text",
       "setAsCover": "Make cover",
       "unsetAsCover": "Remove cover",
       "successfullyChangedCoverImage": "The cover image was successfully changed.",
-      "usedAsCover": "Cover image"
+      "usedAsCover": "Cover image",
+      "play": "Play",
+      "playFile": "Play {file}",
+      "audioError": "Could not play this audio file."
     },
     "comment": {
       "title": "Comments",
@@ -971,7 +1238,10 @@
       "addedSuccess": "The comment was added successfully.",
       "permalink": "Copy permalink to this comment",
       "sortNewestFirst": "Newest first",
-      "sortOldestFirst": "Oldest first"
+      "sortOldestFirst": "Oldest first",
+      "reply": "Reply",
+      "jumpToOriginal": "Jump to original comment",
+      "deletedComment": "deleted comment"
     },
     "mention": {
       "noUsersFound": "No users found"
@@ -983,8 +1253,7 @@
       "1week": "1 week"
     },
     "description": {
-      "placeholder": "Enter a description, hit '/' for more options…",
-      "empty": "No description available yet."
+      "placeholder": "Enter a description, hit '/' for more options…"
     },
     "assignee": {
       "placeholder": "Type to assign a user…",
@@ -995,10 +1264,12 @@
     "label": {
       "placeholder": "Type to add a label…",
       "createPlaceholder": "Add this as new label",
+      "linkShareCannotCreate": "New labels can't be created from a shared link. Only labels already used in this project can be added.",
+      "removeLabel": "Remove label {label}",
       "addSuccess": "The label has been added successfully.",
-      "createSuccess": "The label has been created successfully.",
       "removeSuccess": "The label has been removed successfully.",
       "addCreateSuccess": "The label has been created and added successfully.",
+      "createFailed": "These labels could not be created and were not added: {labels}",
       "delete": {
         "header": "Delete this label",
         "text1": "Are you sure you want to delete this label?",
@@ -1043,6 +1314,9 @@
       "after": "{amount} {unit} after {type}",
       "beforeShort": "before",
       "afterShort": "after",
+      "periodUnit": "Time unit",
+      "periodDirection": "Before or after",
+      "periodRelativeTo": "Relative to",
       "onDueDate": "On the due date",
       "onStartDate": "On the start date",
       "onEndDate": "On the end date",
@@ -1061,12 +1335,11 @@
       "hours": "Hours",
       "days": "Days",
       "weeks": "Weeks",
-      "months": "Months",
-      "years": "Years",
       "invalidAmount": "Please enter more than 0."
     },
     "quickAddMagic": {
       "hint": "Use magic prefixes to define due dates, assignees and other task properties.",
+      "quickEntryHint": "Use magic prefixes for dates, labels & more. Open the main Vikunja app and check the tooltip on the task input for more details.",
       "title": "Quick Add Magic",
       "intro": "When creating a task, you can use special keywords to directly add attributes to the newly created task. This allows to add commonly used attributes to tasks much faster.",
       "multiple": "You can use this multiple times.",
@@ -1114,18 +1387,21 @@
         "header": "Delete the team",
         "text1": "Are you sure you want to delete this team and all of its members?",
         "text2": "All team members will lose access to projects shared with this team. This CANNOT BE UNDONE!",
+        "cleanupText": "On projects the team members lose access to, the following will also be deleted:",
         "success": "The team was successfully deleted."
       },
       "deleteUser": {
         "header": "Remove a user from the team",
         "text1": "Are you sure you want to remove this user from the team?",
         "text2": "They will lose access to all projects this team has access to. This CANNOT BE UNDONE!",
+        "cleanupText": "On projects this user loses access to, the following will also be deleted:",
         "success": "The user was successfully deleted from the team."
       },
       "leave": {
         "title": "Leave team",
         "text1": "Are you sure you want to leave this team?",
         "text2": "You will lose access to all projects this team has access to. If you change your mind you'll need a team admin to add you again.",
+        "cleanupText": "On projects you lose access to, the following will also be deleted:",
         "success": "You have successfully left the team."
       }
     },
@@ -1153,6 +1429,7 @@
     "task": {
       "title": "Task Page",
       "done": "Mark task done / undone",
+      "doneAndBack": "Mark task done and go back",
       "assign": "Assign this task to a user",
       "labels": "Add labels to this task",
       "dueDate": "Change the due date of this task",
@@ -1215,7 +1492,6 @@
     "unarchive": "Un-Archive",
     "setBackground": "Background settings",
     "share": "Share",
-    "newProject": "New project",
     "createProject": "Create project",
     "cantArchiveIsDefault": "You cannot archive this because it is your default project.",
     "cantDeleteIsDefault": "You cannot delete this because it is your default project.",
@@ -1239,10 +1515,18 @@
     "title": "Notifications",
     "none": "You don't have any notifications. Have a nice day!",
     "explainer": "Notifications will appear here when actions, projects or tasks you subscribed to happen.",
+    "read": "Read",
+    "unread": "Unread",
     "markAllRead": "Mark all notifications as read",
-    "markAllReadSuccess": "Successfully marked all notifications as read."
+    "markAllReadSuccess": "Successfully marked all notifications as read.",
+    "subscribeFeed": "Subscribe to notifications via Atom feed",
+    "clearAll": "Clear notifications",
+    "clearAllSuccess": "All notifications have been cleared.",
+    "loadMore": "Load older notifications"
   },
   "quickActions": {
+    "title": "Search and quick actions",
+    "notLoggedIn": "Please log in to the main Vikunja window first.",
     "commands": "Commands",
     "placeholder": "Type a command or search…",
     "hint": "You can use {project} to limit the search to a project. Combine {project} or {label} (labels) with a search query to search for a task with these labels or on that project. Use {assignee} to only search for teams.",
@@ -1255,15 +1539,20 @@
     "newTeam": "Enter the name of the new team…",
     "createTask": "Create a task in the current project ({title})",
     "createProject": "Create a project",
+    "removePrefillDescription": "Remove the description",
+    "results": "No results | {count} result | {count} results",
+    "resultTypes": {
+      "command": "Command",
+      "task": "Task",
+      "project": "Project",
+      "team": "Team",
+      "label": "Label"
+    },
     "cmds": {
       "newTask": "New task",
       "newProject": "New project",
       "newTeam": "New team"
     }
-  },
-  "date": {
-    "altFormatLong": "j M Y, H:i",
-    "altFormatShort": "j M Y"
   },
   "reaction": {
     "reactedWith": "{user} reacted with {value}",
@@ -1298,15 +1587,26 @@
     "1023": "You can't do that as a link share.",
     "1024": "Invalid claim data for field {field} of type {type}.",
     "1025": "The timezone '{timezone}' is invalid. Please select a valid timezone from the list.",
+    "1035": "There is no pending email change to confirm.",
+    "1036": "Please wait a minute before requesting another confirmation email.",
+    "1038": "The custom scope set by the OIDC provider is malformed. Please make sure the openid provider sets the data correctly for your scope. Check especially to have set an oidcID.",
+    "1039": "This TOTP passcode has already been used. Please wait for the next passcode.",
+    "1040": "This account is locked due to too many failed login attempts. You can reset your password to unlock it.",
+    "1041": "Too many failed attempts. Please wait a few minutes and try again.",
     "2001": "ID cannot be empty or 0.",
     "2002": "Some of the request data was invalid.",
     "2003": "The timezone '{timezone}' is invalid.",
+    "2005": "This invite link is invalid or expired.",
+    "2006": "This invite link does not exist.",
+    "2007": "Externally managed teams cannot be attached to an invite link.",
     "3001": "The project does not exist.",
     "3004": "You need to have read permissions on that project to perform that action.",
     "3005": "The project title cannot be empty.",
     "3006": "The project share does not exist.",
     "3007": "A project with this identifier already exists.",
     "3008": "The project is archived and can therefore only be accessed read only. This is also true for all tasks associated with this project.",
+    "3016": "The parent project is archived. Un-archive the parent project first.",
+    "3017": "The default project must be a project you can write to.",
     "4001": "The task title cannot be empty.",
     "4002": "The task does not exist.",
     "4003": "All bulk editing tasks must belong to the same project.",
@@ -1330,6 +1630,8 @@
     "4021": "This user is already assigned to that task.",
     "4022": "Please provide what the reminder date is relative to.",
     "4023": "Cannot create a task relation cycle.",
+    "4034": "The file does not exist.",
+    "4035": "The uploaded file exceeds the maximum configured file size.",
     "6001": "The team name cannot be empty.",
     "6002": "The team does not exist.",
     "6004": "The team already has access to that project.",
@@ -1349,6 +1651,7 @@
     "10003": "You cannot remove the last bucket on a project.",
     "10004": "You cannot add the task to this bucket as it already exceeded the limit of tasks it can hold.",
     "10005": "There can be only one done bucket per project.",
+    "10007": "A project view can have at most 100 buckets.",
     "11001": "The saved filter does not exist.",
     "11002": "Saved filters are not available for link shares.",
     "12001": "The subscription entity type is invalid.",
@@ -1358,23 +1661,158 @@
     "13002": "The provided link share password is invalid.",
     "13003": "The provided link share token is invalid.",
     "14001": "The provided api token is invalid.",
-    "14002": "The permission {permission} of group {group} is invalid."
+    "14002": "The permission {permission} of group {group} is invalid.",
+    "14005": "A migration from this service is already running. Please wait until it is done.",
+    "14009": "The provided zip file does not contain a Vikunja data file. Make sure you upload a Vikunja export.",
+    "14010": "The provided file could not be parsed. Please make sure it is a valid export file.",
+    "14011": "The provided file is not a valid zip file.",
+    "14012": "The provided file does not contain any data.",
+    "14013": "The export was created with a Vikunja version that is too old to import. Please create a new export with a more recent version.",
+    "14016": "The import configuration could not be parsed. Please make sure it is a valid JSON object.",
+    "14018": "The import contains more items than the configured maximum.",
+    "14019": "The migration state is invalid or expired. Please start the migration again.",
+    "14201": "Planka rejected the provided credentials. Check the URL and the API key or username and password.",
+    "14202": "The Planka account requires an extra login step (two-factor code or accepting the terms). Log in to Planka in the browser once, or use an API key instead of username and password.",
+    "14203": "A Planka URL and either an API key or username and password are required.",
+    "14204": "Could not reach a Planka API at the given URL. Check the URL and that Vikunja can reach the instance.",
+    "14205": "The Planka URL points to a private or local network address, which Vikunja blocks by default. An administrator can allow it by setting outgoingrequests.allownonroutableips to true."
   },
   "about": {
     "title": "About",
     "version": "Version: {version}",
     "frontendVersion": "Frontend version: {version}",
-    "apiVersion": "API version: {version}"
+    "apiVersion": "API version: {version}",
+    "proActive": "Pro active"
+  },
+  "timeTracking": {
+    "title": "Time tracking",
+    "stop": "Stop timer",
+    "logTime": "Log time",
+    "editEntry": "Edit entry",
+    "form": {
+      "task": "Task",
+      "taskSearch": "Search for a task…",
+      "commentPlaceholder": "What did you work on?",
+      "save": "Save entry",
+      "startTimer": "Start timer",
+      "update": "Update entry",
+      "smartFill": "Fill from last entry",
+      "endsSpanningEntriesAt": "Starting this timer ends your overlapping time entries at {time}."
+    },
+    "list": {
+      "emptyTask": "No time tracked for this task yet.",
+      "emptyFiltered": "No time tracked for the selected filters.",
+      "total": "Total",
+      "pageTotal": "Total on this page",
+      "time": "Time",
+      "duration": "Duration"
+    },
+    "browse": {
+      "selectRange": "Select a range",
+      "userSearch": "Search for a user…"
+    }
   },
   "time": {
+    "justNow": "just now",
     "units": {
       "seconds": "second|seconds",
       "minutes": "minute|minutes",
       "hours": "hour|hours",
       "days": "day|days",
       "weeks": "week|weeks",
-      "months": "month|months",
       "years": "year|years"
+    }
+  },
+  "admin": {
+    "title": "Administration",
+    "labels": {
+      "users": "Users",
+      "tasks": "Tasks"
+    },
+    "overview": {
+      "shares": "Shares",
+      "linkSharesShort": "link",
+      "teamSharesShort": "team",
+      "userSharesShort": "user",
+      "version": "Version",
+      "license": "License",
+      "licenseValidUntil": "Valid until",
+      "licenseExpiresIn": "in {days} days",
+      "licenseLastVerified": "Last verified",
+      "licenseNever": "never",
+      "licenseLastCheckFailed": "last check failed",
+      "licenseFeatures": "Features",
+      "licenseInstance": "Instance ID",
+      "licenseManage": "Manage"
+    },
+    "searchUsersPlaceholder": "Search by username or email…",
+    "users": {
+      "status": "Status",
+      "details": "Details",
+      "detailsTitle": "User: {username}",
+      "issuer": "Issuer",
+      "issuerLocal": "Local",
+      "issuerUrl": "Issuer URL",
+      "subject": "Subject",
+      "statusActive": "Active",
+      "statusEmailConfirmation": "Email confirmation required",
+      "statusDisabled": "Disabled",
+      "statusLocked": "Account locked",
+      "isAdminLabel": "Administrator",
+      "addUser": "Add user",
+      "createTitle": "Create user",
+      "nameLabel": "Name",
+      "skipEmailConfirm": "Skip email confirmation",
+      "createSubmit": "Create user",
+      "saveButton": "Save changes",
+      "newPasswordLabel": "New password",
+      "setPassword": "Set password",
+      "setPasswordSuccess": "The password of {username} was updated.",
+      "sendResetEmail": "Send password-reset email",
+      "sendResetEmailSuccess": "A password-reset email was sent to {username}.",
+      "createdSuccess": "User {username} created.",
+      "updatedSuccess": "User {username} updated.",
+      "deletedSuccess": "User {username} deleted.",
+      "deleteScheduledSuccess": "User {username} will receive a confirmation email to schedule the deletion.",
+      "confirmDeleteTitle": "Delete user?",
+      "confirmDeleteIntro": "How should user {username} be deleted?",
+      "deleteModeScheduled": "Schedule deletion",
+      "deleteModeScheduledHelp": "Schedule deletion sends the user a confirmation email, mirroring a self-initiated account deletion.",
+      "deleteModeNow": "Delete now",
+      "deleteModeNowHelp": "Delete now removes the user and all their data immediately. This cannot be undone."
+    },
+    "projects": {
+      "ownerLabel": "Owner",
+      "reassignOwner": "Reassign owner",
+      "reassignTitle": "Reassign {title}",
+      "reassignedSuccess": "Project owner reassigned.",
+      "newOwnerLabel": "New owner",
+      "searchPlaceholder": "Search projects…",
+      "filterByOwner": "Filter by owner",
+      "hideDefaultProjects": "Hide default projects"
+    },
+    "inviteLinks": {
+      "title": "Invite links",
+      "create": "Create invite link",
+      "name": "Link name",
+      "teams": "Teams to join",
+      "maxUses": "Maximum uses",
+      "unlimited": "Unlimited",
+      "uses": "Uses",
+      "expiresAt": "Expires at",
+      "neverExpires": "Never expires",
+      "createdBy": "Created by",
+      "skipEmailConfirm": "Skip email confirmation",
+      "shownOnce": "This link is shown only once. Copy it before closing this window.",
+      "url": "Invite link",
+      "copy": "Copy link",
+      "copied": "Link copied",
+      "delete": "Delete invite link",
+      "deleteConfirm": "Delete “{name}”? People will no longer be able to register with this link. Existing accounts will stay active.",
+      "deleted": "Invite link deleted.",
+      "empty": "No invite links yet. Create a link to invite people to this instance.",
+      "futureExpiry": "Choose an expiry in the future.",
+      "creatorDeleted": "Deleted user"
     }
   }
 }

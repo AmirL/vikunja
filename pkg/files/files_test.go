@@ -18,13 +18,17 @@ package files
 
 import (
 	"bytes"
+	"errors"
 	"image"
 	"image/png"
 	"io"
-	"os"
+	"io/fs"
+	"net/http"
 	"testing"
 
+	"code.vikunja.io/api/pkg/config"
 	"code.vikunja.io/api/pkg/db"
+	"code.vikunja.io/api/pkg/events"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,24 +46,76 @@ func TestCreate(t *testing.T) {
 	t.Run("Normal", func(t *testing.T) {
 		initFixtures(t)
 		ta := &testauth{id: 1}
-		createdFile, err := Create(bytes.NewReader([]byte("testfile")), "testfile", 100, ta)
+		content := []byte("testfile")
+		createdFile, err := Create(bytes.NewReader(content), "testfile", uint64(len(content)), ta)
 		require.NoError(t, err)
 
 		// Check the file was created correctly
+		s := db.NewSession()
+		defer s.Close()
 		file := &File{ID: createdFile.ID}
-		err = file.LoadFileMetaByID()
+		err = file.LoadFileMetaByID(s)
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), file.CreatedByID)
 		assert.Equal(t, "testfile", file.Name)
-		assert.Equal(t, uint64(100), file.Size)
+		assert.Equal(t, uint64(len(content)), file.Size)
 
 	})
 	t.Run("Too Large", func(t *testing.T) {
 		initFixtures(t)
+		// initFixtures resets FilesMaxSize, so override afterwards.
+		oldMax := config.FilesMaxSize.GetString()
+		require.NoError(t, config.SetMaxFileSizeMBytesFromString("1MB"))
+		t.Cleanup(func() { _ = config.SetMaxFileSizeMBytesFromString(oldMax) })
+
 		ta := &testauth{id: 1}
-		_, err := Create(bytes.NewReader([]byte("testfile")), "testfile", 99999999999, ta)
+		_, err := Create(bytes.NewReader(make([]byte, 2*1024*1024)), "big.bin", 0, ta)
 		require.Error(t, err)
 		assert.True(t, IsErrFileIsTooLarge(err))
+	})
+}
+
+func TestCreate_HardenedAgainstLyingCaller(t *testing.T) {
+	// Regression: GHSA-qh78-rvg3-cv54. Caller's claimed size must not
+	// influence the limit check or the stored size.
+
+	// setLimit must run AFTER initFixtures since initFixtures resets it.
+	setLimit := func(t *testing.T, size string) {
+		t.Helper()
+		oldMax := config.FilesMaxSize.GetString()
+		require.NoError(t, config.SetMaxFileSizeMBytesFromString(size))
+		t.Cleanup(func() {
+			_ = config.SetMaxFileSizeMBytesFromString(oldMax)
+		})
+	}
+
+	ta := &testauth{id: 1}
+
+	t.Run("content over limit, claimed size under limit", func(t *testing.T) {
+		initFixtures(t)
+		setLimit(t, "1MB")
+		payload := make([]byte, 2*1024*1024)
+		_, err := Create(bytes.NewReader(payload), "sneaky.bin", 1, ta)
+		require.Error(t, err)
+		assert.True(t, IsErrFileIsTooLarge(err))
+	})
+
+	t.Run("content under limit, claimed size over limit", func(t *testing.T) {
+		initFixtures(t)
+		setLimit(t, "1MB")
+		payload := []byte("hi")
+		f, err := Create(bytes.NewReader(payload), "honest.txt", 99999999999, ta)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(len(payload)), f.Size)
+	})
+
+	t.Run("content exactly at limit", func(t *testing.T) {
+		initFixtures(t)
+		setLimit(t, "1MB")
+		payload := make([]byte, 1*1024*1024)
+		f, err := Create(bytes.NewReader(payload), "edge.bin", 0, ta)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(1*1024*1024), f.Size)
 	})
 }
 
@@ -115,6 +171,51 @@ func TestFile_Delete(t *testing.T) {
 	})
 }
 
+func TestFile_DeleteOnCommit(t *testing.T) {
+	t.Run("removes the blob and previews once dispatched", func(t *testing.T) {
+		s := db.NewSession()
+		defer s.Close()
+		initFixtures(t)
+		f := &File{ID: 1}
+		require.NoError(t, f.SavePreview(PreviewMedium, []byte("preview")))
+
+		require.NoError(t, f.DeleteOnCommit(s))
+		require.NoError(t, s.Commit())
+		db.AssertMissing(t, "files", map[string]interface{}{"id": 1})
+		_, err := FileStat(f)
+		require.NoError(t, err)
+
+		events.DispatchPending(t.Context(), s)
+		_, err = FileStat(f)
+		require.ErrorIs(t, err, fs.ErrNotExist)
+		_, _, err = f.OpenPreview(PreviewMedium)
+		require.ErrorIs(t, err, fs.ErrNotExist)
+	})
+	t.Run("keeps row and blob on rollback", func(t *testing.T) {
+		s := db.NewSession()
+		defer s.Close()
+		initFixtures(t)
+		f := &File{ID: 1}
+
+		require.NoError(t, f.DeleteOnCommit(s))
+		require.NoError(t, s.Rollback())
+		events.CleanupPending(s)
+		events.DispatchPending(t.Context(), s)
+
+		db.AssertExists(t, "files", map[string]interface{}{"id": 1}, false)
+		_, err := FileStat(f)
+		require.NoError(t, err)
+	})
+	t.Run("Nonexisting", func(t *testing.T) {
+		s := db.NewSession()
+		defer s.Close()
+		initFixtures(t)
+
+		err := (&File{ID: 9999}).DeleteOnCommit(s)
+		assert.True(t, IsErrFileDoesNotExist(err))
+	})
+}
+
 func TestFile_LoadFileByID(t *testing.T) {
 	t.Run("Normal", func(t *testing.T) {
 		initFixtures(t)
@@ -127,7 +228,8 @@ func TestFile_LoadFileByID(t *testing.T) {
 		f := &File{ID: 9999}
 		err := f.LoadFileByID()
 		require.Error(t, err)
-		assert.True(t, os.IsNotExist(err))
+		assert.True(t, IsErrFileDoesNotExist(err))
+		assert.Equal(t, http.StatusNotFound, err.(ErrFileDoesNotExist).HTTPError().HTTPCode)
 	})
 }
 
@@ -155,18 +257,45 @@ func TestFileSave_UsesStorage(t *testing.T) {
 	assert.Equal(t, content, written)
 }
 
+type failingWriteStorage struct {
+	*memStorage
+}
+
+func (failingWriteStorage) Write(string, io.ReadSeeker, uint64) error {
+	return errors.New("write failed")
+}
+
+func TestCreateWithMimeAndSession_RemovesRowWhenSaveFails(t *testing.T) {
+	initFixtures(t)
+	useStorage(t, failingWriteStorage{newMemStorage()})
+
+	s := db.NewSession()
+	defer s.Close()
+
+	file, err := CreateWithMimeAndSession(s, bytes.NewReader([]byte("content")), "failing.txt", 0, &testauth{id: 1}, "text/plain", true)
+	require.Error(t, err)
+	assert.Nil(t, file)
+
+	require.NoError(t, s.Commit())
+	db.AssertMissing(t, "files", map[string]interface{}{"name": "failing.txt"})
+}
+
 func TestFile_LoadFileMetaByID(t *testing.T) {
 	t.Run("Normal", func(t *testing.T) {
 		initFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
 		f := &File{ID: 1}
-		err := f.LoadFileMetaByID()
+		err := f.LoadFileMetaByID(s)
 		require.NoError(t, err)
 		assert.Equal(t, "test", f.Name)
 	})
 	t.Run("Nonexisting", func(t *testing.T) {
 		initFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
 		f := &File{ID: 9999}
-		err := f.LoadFileMetaByID()
+		err := f.LoadFileMetaByID(s)
 		require.Error(t, err)
 		assert.True(t, IsErrFileDoesNotExist(err))
 	})

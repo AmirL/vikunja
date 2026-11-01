@@ -7,8 +7,9 @@
 			:placeholder="$t('user.auth.passwordPlaceholder')"
 			required
 			:type="passwordFieldType"
-			autocomplete="current-password"
-			:tabindex="tabindex"
+			:autocomplete="autocomplete"
+			:aria-invalid="isValid !== true ? true : undefined"
+			:aria-describedby="errorId"
 			@keyup.enter="e => $emit('submit', e)"
 			@focusout="() => {validate(); validateAfterFirst = true}"
 			@keyup="() => {validateAfterFirst ? validate() : null}"
@@ -25,28 +26,31 @@
 	</div>
 	<p
 		v-if="isValid !== true"
+		:id="errorId"
 		class="help is-danger"
+		role="alert"
 	>
 		{{ isValid }}
 	</p>
 </template>
 
 <script lang="ts" setup>
-import {ref, watchEffect} from 'vue'
+import {computed, ref, watchEffect} from 'vue'
 import {useDebounceFn} from '@vueuse/core'
 import {useI18n} from 'vue-i18n'
 import BaseButton from '@/components/base/BaseButton.vue'
 import {validatePassword} from '@/helpers/validatePasswort'
 
 const props = withDefaults(defineProps<{
-	modelValue: string,
-	tabindex?: string,
+	modelValue?: string,
 	// This prop is a workaround to trigger validation from the outside when the user never had focus in the input.
 	validateInitially?: boolean,
 	validateMinLength?: boolean,
+	autocomplete?: string,
 }>(), {
-	tabindex: undefined,
+	modelValue: '',
 	validateMinLength: true,
+	autocomplete: 'current-password',
 })
 
 const emit = defineEmits<{
@@ -59,6 +63,7 @@ const password = ref('')
 // eslint-disable-next-line vue/no-setup-props-reactivity-loss
 const isValid = ref<true | string>(props.validateInitially === true ? true : '')
 const validateAfterFirst = ref(false)
+const errorId = computed(() => isValid.value !== true ? 'password-error' : undefined)
 
 const validate = useDebounceFn(() => {
 	const valid = validatePassword(password.value, props.validateMinLength)

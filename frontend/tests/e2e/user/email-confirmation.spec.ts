@@ -1,3 +1,4 @@
+import {setupApiUrl} from '../../support/authenticateUser'
 import {test, expect} from '../../support/fixtures'
 import {UserFactory} from '../../factories/user'
 import {TokenFactory} from '../../factories/token'
@@ -8,9 +9,7 @@ test.describe('Email Confirmation', () => {
 	let confirmationToken
 
 	test.beforeEach(async ({page, apiContext}) => {
-		await UserFactory.truncate()
-		await TokenFactory.truncate()
-
+		await setupApiUrl(page)
 		// Create a user with status = 1 (StatusEmailConfirmationRequired)
 		const users = await UserFactory.create(1, {
 			username: 'unconfirmeduser',
@@ -164,5 +163,20 @@ test.describe('Email Confirmation', () => {
 		await expect(page).not.toHaveURL(/\/login/)
 		// Check that the username appears in the greeting
 		await expect(page.locator('body')).toContainText(user.username)
+	})
+})
+
+test.describe('Email change', () => {
+	test('rejects email change with wrong current password', async ({authenticatedPage: page}) => {
+		await page.goto('/user/settings/email-update')
+		await page.locator('#newEmail').fill('new@example.com')
+		await page.locator('#currentPasswordEmail').fill('WRONG_PASSWORD')
+
+		const resp = page.waitForResponse(r => r.url().includes('/user/settings/email'))
+		await page.getByRole('button', {name: 'Save'}).last().click()
+		const r = await resp
+		expect(r.status()).toBeGreaterThanOrEqual(400)
+
+		await expect(page.locator('.global-notification .vue-notification.error')).toBeVisible()
 	})
 })

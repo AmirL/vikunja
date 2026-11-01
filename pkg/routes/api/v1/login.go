@@ -21,10 +21,11 @@ import (
 
 	"code.vikunja.io/api/pkg/config"
 	"code.vikunja.io/api/pkg/db"
+	"code.vikunja.io/api/pkg/events"
+	"code.vikunja.io/api/pkg/log"
 	"code.vikunja.io/api/pkg/models"
 	"code.vikunja.io/api/pkg/modules/auth"
-	"code.vikunja.io/api/pkg/modules/auth/ldap"
-	"code.vikunja.io/api/pkg/modules/keyvalue"
+	"code.vikunja.io/api/pkg/routes/api/shared"
 	user2 "code.vikunja.io/api/pkg/user"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -49,71 +50,13 @@ func Login(c *echo.Context) (err error) {
 		return c.JSON(http.StatusBadRequest, models.Message{Message: "Please provide a username and password."})
 	}
 
-	s := db.NewSession()
-	defer s.Close()
-
-	var user *user2.User
-	if config.AuthLdapEnabled.GetBool() {
-		user, err = ldap.AuthenticateUserInLDAP(s, u.Username, u.Password, config.AuthLdapGroupSyncEnabled.GetBool(), config.AuthLdapAvatarSyncAttribute.GetString())
-		if err != nil && !user2.IsErrWrongUsernameOrPassword(err) {
-			_ = s.Rollback()
-			return err
-		}
-	}
-
-	if user == nil {
-		// This allows us to still have local users while ldap is enabled
-		user, err = user2.CheckUserCredentials(s, &u)
-		if err != nil {
-			_ = s.Rollback()
-			return err
-		}
-	}
-
-	if user.Status == user2.StatusDisabled || user.Status == user2.StatusAccountLocked {
-		_ = s.Rollback()
-		return &user2.ErrAccountDisabled{UserID: user.ID}
-	}
-
-	totpEnabled, err := user2.TOTPEnabledForUser(s, user)
+	user, err := shared.AuthenticateUserCredentials(c.Request().Context(), &u)
 	if err != nil {
-		_ = s.Rollback()
-		return err
-	}
-
-	if totpEnabled {
-		if u.TOTPPasscode == "" {
-			_ = s.Rollback()
-			return user2.ErrInvalidTOTPPasscode{}
-		}
-
-		_, err = user2.ValidateTOTPPasscode(s, &user2.TOTPPasscode{
-			User:     user,
-			Passcode: u.TOTPPasscode,
-		})
-		if err != nil {
-			if user2.IsErrInvalidTOTPPasscode(err) {
-				user2.HandleFailedTOTPAuth(s, user)
-			}
-			_ = s.Rollback()
-			return err
-		}
-	}
-
-	if err := keyvalue.Del(user.GetFailedTOTPAttemptsKey()); err != nil {
-		return err
-	}
-	if err := keyvalue.Del(user.GetFailedPasswordAttemptsKey()); err != nil {
-		return err
-	}
-
-	if err := s.Commit(); err != nil {
-		_ = s.Rollback()
 		return err
 	}
 
 	// Create token
-	return auth.NewUserAuthTokenResponse(user, c, u.LongToken)
+	return auth.NewUserAuthTokenResponse(user, c, u.LongToken, nil)
 }
 
 // RenewToken renews a link share token only. User tokens must use
@@ -181,17 +124,17 @@ func RenewToken(c *echo.Context) (err error) {
 // @tags auth
 // @Produce json
 // @Success 200 {object} auth.Token
-// @Failure 401 {object} models.Message "Invalid or expired refresh token."
+// @Failure 401 {object} web.HTTPError "Invalid, expired or already-used refresh token, or no refresh token cookie sent (codes 16002-16005)."
 // @Router /user/token/refresh [post]
 func RefreshToken(c *echo.Context) (err error) {
 	cookie, err := c.Cookie(auth.RefreshTokenCookieName)
 	if err != nil || cookie.Value == "" {
-		return echo.NewHTTPError(http.StatusUnauthorized, "No refresh token provided.")
+		return &models.ErrNoRefreshToken{}
 	}
 
 	result, err := auth.RefreshSession(cookie.Value)
 	if err != nil {
-		if user2.IsErrUserStatusError(err) {
+		if auth.IsUnusableRefreshToken(err) {
 			auth.ClearRefreshTokenCookie(c)
 		}
 		return err
@@ -207,42 +150,52 @@ func RefreshToken(c *echo.Context) (err error) {
 	return c.JSON(http.StatusOK, auth.Token{Token: result.AccessToken})
 }
 
+type LogoutResponse struct {
+	Message string `json:"message"`
+	// RP-Initiated Logout URL the frontend redirects to. Empty for non-OIDC sessions.
+	OIDCLogoutURL string `json:"oidc_logout_url,omitempty"`
+}
+
 // Logout deletes the current session from the server.
 // @Summary Logout
-// @Description Destroys the current session and clears the refresh token cookie.
+// @Description Destroys the current session and clears the refresh token cookie. For OpenID Connect sessions the response includes an `oidc_logout_url` the client should redirect to so the provider session is ended too.
 // @tags auth
 // @Produce json
-// @Success 200 {object} models.Message "Successfully logged out."
+// @Success 200 {object} v1.LogoutResponse "Successfully logged out."
 // @Router /user/logout [post]
 func Logout(c *echo.Context) (err error) {
 	auth.ClearRefreshTokenCookie(c)
 
 	var sid string
+	var userID int64
 	if raw := c.Get("user"); raw != nil {
 		if jwtinf, ok := raw.(*jwt.Token); ok {
 			if claims, ok := jwtinf.Claims.(jwt.MapClaims); ok {
 				sid, _ = claims["sid"].(string)
+				// Only user tokens carry a sid, but check the type explicitly
+				// so a link share id can never be logged as a user id.
+				if typ, ok := claims["type"].(float64); ok && int(typ) == auth.AuthTypeUser {
+					if id, ok := claims["id"].(float64); ok {
+						userID = int64(id)
+					}
+				}
 			}
 		}
 	}
 
-	if sid == "" {
-		return c.JSON(http.StatusOK, models.Message{Message: "Successfully logged out."})
-	}
-
-	s := db.NewSession()
-	defer s.Close()
-
-	_, err = s.Where("id = ?", sid).Delete(&models.Session{})
+	oidcLogoutURL, err := shared.LogoutSession(sid)
 	if err != nil {
-		_ = s.Rollback()
 		return err
 	}
 
-	if err := s.Commit(); err != nil {
-		_ = s.Rollback()
-		return err
+	if userID != 0 {
+		if err := events.DispatchWithContext(c.Request().Context(), &user2.LogoutEvent{UserID: userID}); err != nil {
+			log.Errorf("Could not dispatch logout event: %s", err)
+		}
 	}
 
-	return c.JSON(http.StatusOK, models.Message{Message: "Successfully logged out."})
+	return c.JSON(http.StatusOK, LogoutResponse{
+		Message:       "Successfully logged out.",
+		OIDCLogoutURL: oidcLogoutURL,
+	})
 }

@@ -18,37 +18,38 @@ package doctor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"time"
 
 	"code.vikunja.io/api/pkg/config"
 	"code.vikunja.io/api/pkg/modules/auth/ldap"
+	"code.vikunja.io/api/pkg/modules/auth/openid"
 	"code.vikunja.io/api/pkg/red"
+	"code.vikunja.io/api/pkg/utils"
 )
 
-// CheckOptionalServices returns check groups for all enabled optional services.
-func CheckOptionalServices() []CheckGroup {
-	var groups []CheckGroup
-
+// CheckOptionalServices runs the checks for all enabled optional services, passing
+// each group to emit as it completes.
+func CheckOptionalServices(emit func(CheckGroup)) {
 	if config.RedisEnabled.GetBool() {
-		groups = append(groups, checkRedis())
+		emit(checkRedis())
 	}
 
 	if config.MailerEnabled.GetBool() {
-		groups = append(groups, checkMailer())
+		emit(checkMailer())
 	}
 
 	if config.AuthLdapEnabled.GetBool() {
-		groups = append(groups, checkLDAP())
+		emit(checkLDAP())
 	}
 
 	if config.AuthOpenIDEnabled.GetBool() {
-		groups = append(groups, checkOpenID())
+		emit(checkOpenID())
 	}
-
-	return groups
 }
 
 func checkRedis() CheckGroup {
@@ -243,9 +244,22 @@ func checkOpenID() CheckGroup {
 	}
 
 	var results []CheckResult
+	providerIssuers := make(map[string]string)
 	for key, p := range providerMap {
-		result := checkOpenIDProvider(key, p)
+		result, issuer := checkOpenIDProvider(key, p)
 		results = append(results, result)
+		if issuer != "" {
+			providerIssuers[key] = issuer
+		}
+	}
+
+	// Check for duplicate issuers among successful providers
+	for _, dup := range openid.FindDuplicateIssuers(providerIssuers) {
+		results = append(results, CheckResult{
+			Name:   "Duplicate Issuer",
+			Passed: false,
+			Error:  dup.Error(),
+		})
 	}
 
 	return CheckGroup{
@@ -254,7 +268,7 @@ func checkOpenID() CheckGroup {
 	}
 }
 
-func checkOpenIDProvider(key string, rawProvider interface{}) CheckResult {
+func checkOpenIDProvider(key string, rawProvider interface{}) (CheckResult, string) {
 	// Extract provider config
 	var pi map[string]interface{}
 	switch p := rawProvider.(type) {
@@ -272,7 +286,7 @@ func checkOpenIDProvider(key string, rawProvider interface{}) CheckResult {
 			Name:   fmt.Sprintf("Provider: %s", key),
 			Passed: false,
 			Error:  "invalid configuration format",
-		}
+		}, ""
 	}
 
 	// Get provider name
@@ -288,7 +302,7 @@ func checkOpenIDProvider(key string, rawProvider interface{}) CheckResult {
 			Name:   fmt.Sprintf("Provider: %s", name),
 			Passed: false,
 			Error:  "authurl not configured",
-		}
+		}, ""
 	}
 
 	// Check if the provider's discovery endpoint is reachable
@@ -308,17 +322,18 @@ func checkOpenIDProvider(key string, rawProvider interface{}) CheckResult {
 			Name:   fmt.Sprintf("Provider: %s", name),
 			Passed: false,
 			Error:  err.Error(),
-		}
+		}, ""
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := utils.NewUnguardedHTTPClient()
+	client.Timeout = 5 * time.Second
 	resp, err := client.Do(req) // #nosec G704 -- URL is from configured OIDC provider endpoints
 	if err != nil {
 		return CheckResult{
 			Name:   fmt.Sprintf("Provider: %s", name),
 			Passed: false,
 			Error:  err.Error(),
-		}
+		}, ""
 	}
 	defer resp.Body.Close()
 
@@ -327,6 +342,18 @@ func checkOpenIDProvider(key string, rawProvider interface{}) CheckResult {
 			Name:   fmt.Sprintf("Provider: %s", name),
 			Passed: false,
 			Error:  fmt.Sprintf("discovery endpoint returned status %d", resp.StatusCode),
+		}, ""
+	}
+
+	// Parse the issuer from the discovery response for duplicate detection
+	var issuer string
+	body, err := io.ReadAll(resp.Body)
+	if err == nil {
+		var discovery struct {
+			Issuer string `json:"issuer"`
+		}
+		if json.Unmarshal(body, &discovery) == nil {
+			issuer = discovery.Issuer
 		}
 	}
 
@@ -334,5 +361,5 @@ func checkOpenIDProvider(key string, rawProvider interface{}) CheckResult {
 		Name:   fmt.Sprintf("Provider: %s", name),
 		Passed: true,
 		Value:  "OK",
-	}
+	}, issuer
 }

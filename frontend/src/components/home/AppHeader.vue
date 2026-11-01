@@ -7,7 +7,7 @@
 		<RouterLink
 			:to="{ name: 'home' }"
 			class="logo-link"
-			:aria-label="$t('navigation.overview')"
+			:aria-label="$t('navigation.home')"
 		>
 			<Logo
 				width="164"
@@ -21,9 +21,9 @@
 			v-if="currentProject?.id"
 			class="project-title-wrapper"
 		>
-			<h1 class="project-title">
+			<span class="project-title">
 				{{ currentProject.title === '' ? $t('misc.loading') : getProjectTitle(currentProject) }}
-			</h1>
+			</span>
 
 			<BaseButton
 				v-if="!isEditorContentEmpty(currentProject.description)"
@@ -39,9 +39,10 @@
 				class="project-title-dropdown"
 				:project="currentProject"
 			>
-				<template #trigger="{ toggleOpen }">
+				<template #trigger="{ toggleOpen, open }">
 					<BaseButton
 						class="project-title-button"
+						:aria-expanded="open"
 						@click="toggleOpen"
 					>
 						<span class="is-sr-only">{{ $t('project.openSettingsMenu') }}</span>
@@ -54,7 +55,15 @@
 			</ProjectSettingsDropdown>
 		</div>
 
+		<div
+			v-else-if="pageTitle"
+			class="project-title-wrapper"
+		>
+			<span class="project-title">{{ pageTitle }}</span>
+		</div>
+
 		<div class="navbar-end">
+			<TimerBadge />
 			<OpenQuickActions />
 			<Notifications />
 			<Dropdown>
@@ -63,15 +72,14 @@
 						class="username-dropdown-trigger"
 						variant="secondary"
 						:shadow="false"
+						:aria-expanded="open"
 						@click="toggleOpen"
 					>
-						<img
-							:src="authStore.avatarUrl"
-							alt=""
+						<UserAvatar
+							:user="authStore.info"
+							:size="40"
 							class="avatar"
-							width="40"
-							height="40"
-						>
+						/>
 						<span class="username">{{ authStore.userDisplayName }}</span>
 						<span
 							class="mis-1 dropdown-icon icon is-small"
@@ -88,16 +96,17 @@
 					{{ $t('user.settings.title') }}
 				</DropdownItem>
 				<DropdownItem
-					v-if="imprintUrl"
-					:href="imprintUrl"
+					v-if="adminPanelEnabled && authStore.info?.is_admin"
+					:to="{ name: 'admin.overview' }"
 				>
-					{{ $t('navigation.imprint') }}
+					{{ $t('admin.title') }}
 				</DropdownItem>
 				<DropdownItem
-					v-if="privacyPolicyUrl"
-					:href="privacyPolicyUrl"
+					v-for="(link, index) in legalLinks"
+					:key="index"
+					:href="link.url"
 				>
-					{{ $t('navigation.privacy') }}
+					{{ link.text }}
 				</DropdownItem>
 				<DropdownItem @click="baseStore.setKeyboardShortcutsActive(true)">
 					{{ $t('keyboardShortcuts.title') }}
@@ -115,17 +124,22 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 
 import { PERMISSIONS as Permissions } from '@/constants/permissions'
+import { PRO_FEATURE } from '@/constants/proFeatures'
 
 import ProjectSettingsDropdown from '@/components/project/ProjectSettingsDropdown.vue'
 import Dropdown from '@/components/misc/Dropdown.vue'
 import DropdownItem from '@/components/misc/DropdownItem.vue'
 import Notifications from '@/components/notifications/Notifications.vue'
+import TimerBadge from '@/components/time-tracking/TimerBadge.vue'
 import Logo from '@/components/home/Logo.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import MenuButton from '@/components/home/MenuButton.vue'
 import OpenQuickActions from '@/components/misc/OpenQuickActions.vue'
+import UserAvatar from '@/components/misc/UserAvatar.vue'
 
 import { getProjectTitle } from '@/helpers/getProjectTitle'
 import { isEditorContentEmpty } from '@/helpers/editorContentEmpty'
@@ -133,23 +147,32 @@ import { isEditorContentEmpty } from '@/helpers/editorContentEmpty'
 import { useBaseStore } from '@/stores/base'
 import { useConfigStore } from '@/stores/config'
 import { useAuthStore } from '@/stores/auth'
-import type { IProject } from '@/modelTypes/IProject'
+import {useCurrentProject} from '@/composables/useCurrentProject'
+import {useLegalLinks} from '@/composables/useLegalLinks'
 
 const baseStore = useBaseStore()
-// Create a mutable copy to satisfy type requirements (readonly deep -> mutable)
-const currentProject = computed<IProject | null>(() => {
-	const project = baseStore.currentProject
-	return project ? { ...project } as IProject : null
-})
+const {currentProject} = useCurrentProject()
 const background = computed(() => baseStore.background)
-const canWriteCurrentProject = computed(() => baseStore.currentProject?.maxPermission !== null && baseStore.currentProject?.maxPermission !== undefined && baseStore.currentProject.maxPermission > Permissions.READ)
+const canWriteCurrentProject = computed(() =>
+	currentProject.value?.max_permission !== null &&
+	currentProject.value?.max_permission !== undefined &&
+	currentProject.value.max_permission > Permissions.READ,
+)
 const menuActive = computed(() => baseStore.menuActive)
+
+// Standalone pages (no project) surface their route's title in the header.
+const route = useRoute()
+const { t } = useI18n()
+const pageTitle = computed(() => {
+	const title = route.meta.title as string | undefined
+	return title ? t(title) : ''
+})
 
 const authStore = useAuthStore()
 
 const configStore = useConfigStore()
-const imprintUrl = computed(() => configStore.legal.imprintUrl)
-const privacyPolicyUrl = computed(() => configStore.legal.privacyPolicyUrl)
+const legalLinks = useLegalLinks()
+const adminPanelEnabled = computed(() => configStore.isProFeatureEnabled(PRO_FEATURE.ADMIN_PANEL))
 </script>
 
 <style lang="scss" scoped>
@@ -164,10 +187,12 @@ $user-dropdown-width-mobile: 5rem;
 	inset-block-start: 0;
 	inset-inline-start: 0;
 	inset-inline-end: 0;
+	z-index: 30;
 
 	display: flex;
 	justify-content: space-between;
 	gap: var(--navbar-gap-width);
+	min-block-size: $navbar-height;
 
 	background: var(--site-background);
 
@@ -257,8 +282,6 @@ $user-dropdown-width-mobile: 5rem;
 }
 
 .navbar-end {
-	margin-inline-start: 0; // overrides bulma core styles
-	margin-inline-end: 0; // overrides bulma core styles
 	flex: 0 0 auto;
 	display: flex;
 	align-items: stretch;

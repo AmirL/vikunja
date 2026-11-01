@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import {computed, useSlots, useId, ref} from 'vue'
+import {computed, useSlots, useId, ref, useAttrs} from 'vue'
+import {useDelayedLoading} from '@/composables/useDelayedLoading'
 
 interface Props {
 	modelValue?: string | number
@@ -8,16 +9,19 @@ interface Props {
 	id?: string
 	disabled?: boolean
 	loading?: boolean
+	layout?: 'stacked' | 'two-col'
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+	layout: 'stacked',
+})
 const emit = defineEmits<{
 	'update:modelValue': [value: string | number]
 }>()
+const showLoading = useDelayedLoading(() => props.loading)
 
 function handleInput(event: Event) {
 	const value = (event.target as HTMLInputElement).value
-	// Preserve numeric type if modelValue was a number
 	if (typeof props.modelValue === 'number') {
 		emit('update:modelValue', value === '' ? '' : Number(value))
 	} else {
@@ -33,6 +37,9 @@ const slots = useSlots()
 const generatedId = useId()
 
 const inputId = computed(() => props.id ?? generatedId)
+const errorId = computed(() => props.error ? `${inputId.value}-error` : undefined)
+const attrs = useAttrs()
+const describedBy = computed(() => [attrs['aria-describedby'], errorId.value].filter(Boolean).join(' ') || undefined)
 const hasAddon = computed(() => !!slots.addon)
 
 const fieldClasses = computed(() => [
@@ -49,12 +56,10 @@ const inputClasses = computed(() => [
 	'input',
 	{
 		'disabled': props.disabled,
-		'is-loading': props.loading,
+		'is-loading': showLoading.value,
 	},
 ])
 
-// Only bind value when modelValue is explicitly provided (not undefined)
-// This allows the component to be used without v-model for native input behavior
 const inputBindings = computed(() => {
 	const bindings: Record<string, unknown> = {}
 	if (props.modelValue !== undefined) {
@@ -63,7 +68,6 @@ const inputBindings = computed(() => {
 	return bindings
 })
 
-// Expose input element for direct access (needed for browser autofill workarounds)
 const inputRef = ref<HTMLInputElement | null>(null)
 defineExpose({
 	get value() {
@@ -77,39 +81,92 @@ defineExpose({
 
 <template>
 	<div :class="fieldClasses">
-		<label
-			v-if="label"
-			:for="inputId"
-			class="label"
-		>
-			{{ label }}
-		</label>
-
-		<div :class="controlClasses">
-			<slot :id="inputId">
-				<input
+		<template v-if="layout === 'two-col'">
+			<label
+				v-if="label"
+				class="two-col"
+			>
+				<span>{{ label }}</span>
+				<slot
 					:id="inputId"
-					ref="inputRef"
-					v-bind="{ ...$attrs, ...inputBindings }"
-					:class="inputClasses"
-					:disabled="disabled || undefined"
-					@input="handleInput"
+					:error-id="errorId"
 				>
-			</slot>
-		</div>
-
-		<div
-			v-if="$slots.addon"
-			class="control"
-		>
-			<slot name="addon" />
-		</div>
-
+					<input
+						:id="inputId"
+						ref="inputRef"
+						v-bind="{ ...$attrs, ...inputBindings }"
+						:class="inputClasses"
+						:disabled="disabled || undefined"
+						:aria-invalid="error ? true : undefined"
+						:aria-describedby="describedBy"
+						@input="handleInput"
+					>
+				</slot>
+			</label>
+			<div
+				v-if="$slots.addon"
+				class="control"
+			>
+				<slot name="addon" />
+			</div>
+		</template>
+		<template v-else>
+			<label
+				v-if="label"
+				:for="inputId"
+				class="label"
+			>
+				{{ label }}
+			</label>
+			<div :class="controlClasses">
+				<slot
+					:id="inputId"
+					:error-id="errorId"
+				>
+					<input
+						:id="inputId"
+						ref="inputRef"
+						v-bind="{ ...$attrs, ...inputBindings }"
+						:class="inputClasses"
+						:disabled="disabled || undefined"
+						:aria-invalid="error ? true : undefined"
+						:aria-describedby="describedBy"
+						@input="handleInput"
+					>
+				</slot>
+			</div>
+			<div
+				v-if="$slots.addon"
+				class="control"
+			>
+				<slot name="addon" />
+			</div>
+		</template>
 		<p
 			v-if="error"
+			:id="errorId"
 			class="help is-danger"
+			role="alert"
 		>
 			{{ error }}
 		</p>
 	</div>
 </template>
+
+<style lang="scss" scoped>
+label.two-col {
+	display: flex;
+	align-items: center;
+	gap: .5rem;
+}
+
+label.two-col > span,
+label.two-col :deep(input),
+label.two-col :deep(.input),
+label.two-col :deep(.select),
+label.two-col :deep(.timezone-select),
+label.two-col :deep(.multiselect) {
+	flex: 0 0 50%;
+	box-sizing: border-box;
+}
+</style>

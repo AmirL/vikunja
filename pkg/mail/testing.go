@@ -46,3 +46,22 @@ func AssertSent(t *testing.T, opts *Opts) {
 
 	assert.True(t, found, "Failed to assert mail '%v' has been sent.", opts)
 }
+
+// LastSent returns the most recently captured mail when running under Fake(),
+// or nil if no mail has been sent. Intended for tests.
+func LastSent() *Opts {
+	if len(sentMails) == 0 {
+		return nil
+	}
+	return sentMails[len(sentMails)-1]
+}
+
+// SentMails returns all mails captured since the last reset, in the order they were sent. Intended for tests.
+func SentMails() []*Opts {
+	return sentMails
+}
+
+// ResetSent clears the captured mail buffer. Intended for tests.
+func ResetSent() {
+	sentMails = nil
+}

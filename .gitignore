@@ -26,6 +26,7 @@ docs/resources/
 pkg/static/templates_vfsdata.go
 files/
 !pkg/files/
+!pkg/web/files/
 vikunja-dump*
 vendor/
 os-packages/
@@ -51,5 +52,6 @@ devenv.local.nix
 # AI Tools
 /.claude/settings.local.json
 PLAN.md
+plans/
 /.crush/
 /.playwright-mcp

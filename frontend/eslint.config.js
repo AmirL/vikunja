@@ -4,6 +4,7 @@ import vueTsEslintConfig from '@vue/eslint-config-typescript'
 import pluginDepend from 'eslint-plugin-depend'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
+import iconButtonAccessibleName from './eslint-rules/icon-button-accessible-name.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -15,17 +16,104 @@ export default [
 	{
 		ignores: [
 			'**/*.test.ts',
+			'src/client/generated/**',
 		],
 	},
 	{
+		plugins: {
+			vikunja: {
+				rules: {
+					'icon-button-accessible-name': iconButtonAccessibleName,
+				},
+			},
+		},
 		rules: {
+			'vikunja/icon-button-accessible-name': 'error',
+			'no-restricted-imports': ['error', {
+				paths: [
+					{
+						name: 'axios',
+						message: 'Use the generated v2 client.',
+					},
+				],
+				patterns: [
+					{
+						group: [
+							'axios/*',
+							'**/services',
+							'**/services/**',
+							'**/models',
+							'**/models/**',
+							'**/modelTypes',
+							'**/modelTypes/**',
+						],
+						message: 'Use generated API types and resource queries.',
+					},
+				],
+			}],
+
 			'quotes': ['error', 'single'],
 			'comma-dangle': ['error', 'always-multiline'],
 			'semi': ['error', 'never'],
 			'indent': ['error', 'tab', { 'SwitchCase': 1 }],
 
 			'vue/v-on-event-hyphenation': ['warn', 'never', {'autofix': true}],
-			'vue/multi-word-component-names': 'off',
+			'vue/multi-word-component-names': ['error', {
+				ignores: [
+					// Existing single-word components grandfathered in.
+					// New components must use multi-word names per Vue style guide.
+					'404',
+					'About',
+					'Attachments',
+					'Auth',
+					'Button.story',
+					'Caldav',
+					'Card',
+					'Card.story',
+					'Comments',
+					'Datepicker',
+					'Description',
+					'Done',
+					'Dropdown',
+					'Error',
+					'Expandable',
+					'Filters',
+					'Flatpickr',
+					'Heading',
+					'Home',
+					'Icon',
+					'index',
+					'Label',
+					'Labels',
+					'Legal',
+					'List',
+					'Loading',
+					'Login',
+					'Logo',
+					'Message',
+					'Migration',
+					'Modal',
+					'Multiselect',
+					'Navigation',
+					'Nothing',
+					'Notification',
+					'Notifications',
+					'Pagination',
+					'Password',
+					'Popup',
+					'Reactions',
+					'Ready',
+					'Register',
+					'Reminders',
+					'Reminders.story',
+					'Sessions',
+					'Settings',
+					'Shortcut',
+					'Sort',
+					'Subscription',
+					'User',
+				],
+			}],
 
 			// uncategorized rules:
 			'vue/component-api-style': ['error', ['script-setup']],
@@ -56,6 +144,11 @@ export default [
 			'vue/no-setup-props-reactivity-loss': 'error',
 
 			'depend/ban-dependencies': 'warn',
+
+			'no-restricted-syntax': ['error', {
+				selector: 'ForInStatement',
+				message: 'Use for...of with Object.keys/entries, or .forEach, instead of for...in. See https://github.com/go-vikunja/vikunja/issues/513',
+			}],
 
 			'@typescript-eslint/no-unused-vars': [
 				'error',

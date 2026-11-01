@@ -69,11 +69,10 @@ func (tm *TeamMember) Create(s *xorm.Session, a web.Auth) (err error) {
 		return err
 	}
 
-	doer, _ := user2.GetFromAuth(a)
 	events.DispatchOnCommit(s, &TeamMemberAddedEvent{
 		Team:   team,
 		Member: member,
-		Doer:   doer,
+		Doer:   doerFromAuth(s, a),
 	})
 	return nil
 }
@@ -115,7 +114,19 @@ func (tm *TeamMember) Delete(s *xorm.Session, a web.Auth) (err error) {
 	}
 	tm.UserID = user.ID
 
-	_, err = s.Where("team_id = ? AND user_id = ?", tm.TeamID, tm.UserID).Delete(&TeamMember{})
+	deleted, err := s.Where("team_id = ? AND user_id = ?", tm.TeamID, tm.UserID).Delete(&TeamMember{})
+	if err != nil {
+		return err
+	}
+	if deleted == 0 {
+		return nil
+	}
+
+	projectIDs, err := teamProjectIDs(s, tm.TeamID)
+	if err != nil {
+		return err
+	}
+	err = cleanupAfterProjectAccessLoss(s, tm.UserID, projectIDs)
 	if err != nil {
 		return err
 	}
@@ -169,6 +180,10 @@ func (tm *TeamMember) Update(s *xorm.Session, _ web.Auth) (err error) {
 		Where("team_id = ? AND user_id = ?", tm.TeamID, tm.UserID).
 		Cols("admin").
 		Update(ttm)
-	tm.Admin = ttm.Admin // Since we're returning the updated permissions object
+
+	// Carry the persisted row back onto tm so the response has id/created, keeping Username (xorm:"-").
+	username := tm.Username
+	*tm = *ttm
+	tm.Username = username
 	return
 }

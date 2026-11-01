@@ -18,42 +18,16 @@ package v1
 
 import (
 	"errors"
-	"io"
-	"mime"
 	"net/http"
-	"strconv"
-	"strings"
 
-	"code.vikunja.io/api/pkg/config"
 	"code.vikunja.io/api/pkg/db"
+	"code.vikunja.io/api/pkg/events"
 	"code.vikunja.io/api/pkg/models"
 	auth2 "code.vikunja.io/api/pkg/modules/auth"
-	"code.vikunja.io/api/pkg/web"
+	webfiles "code.vikunja.io/api/pkg/web/files"
 
 	"github.com/labstack/echo/v5"
 )
-
-// attachmentUploadError represents a structured error for attachment upload failures
-type attachmentUploadError struct {
-	Code    int    `json:"code,omitempty"`
-	Message string `json:"message"`
-}
-
-// toAttachmentUploadError converts an error to a structured attachmentUploadError
-func toAttachmentUploadError(err error) attachmentUploadError {
-	// Try to get structured error info from HTTPErrorProcessor
-	if httpErr, ok := err.(web.HTTPErrorProcessor); ok {
-		errDetails := httpErr.HTTPError()
-		return attachmentUploadError{
-			Code:    errDetails.Code,
-			Message: errDetails.Message,
-		}
-	}
-	// Fall back to just the error message
-	return attachmentUploadError{
-		Message: err.Error(),
-	}
-}
 
 // UploadTaskAttachment handles everything needed for the upload of a task attachment
 // @Summary Upload a task attachment
@@ -76,7 +50,6 @@ func UploadTaskAttachment(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "No task ID provided").Wrap(err)
 	}
 
-	// Permissions check
 	auth, err := auth2.GetAuthFromClaims(c)
 	if err != nil {
 		return err
@@ -85,58 +58,45 @@ func UploadTaskAttachment(c *echo.Context) error {
 	s := db.NewSession()
 	defer s.Close()
 
-	can, err := taskAttachment.CanCreate(s, auth)
-	if err != nil {
-		_ = s.Rollback()
-		return err
-	}
-	if !can {
-		return echo.ErrForbidden
-	}
-
 	// Multipart form
 	form, err := c.MultipartForm()
 	if err != nil {
 		_ = s.Rollback()
+		events.CleanupPending(s)
 		if errors.Is(err, http.ErrNotMultipart) {
 			return echo.NewHTTPError(http.StatusBadRequest, "No multipart form provided").Wrap(err)
 		}
 		return err
 	}
 
-	type result struct {
-		Errors  []attachmentUploadError  `json:"errors"`
-		Success []*models.TaskAttachment `json:"success"`
-	}
-	r := &result{}
 	fileHeaders := form.File["files"]
+	uploads := make([]*models.AttachmentToUpload, 0, len(fileHeaders))
+	var openErrors []error
 	for _, file := range fileHeaders {
-		// We create a new attachment object here to have a clean start
-		ta := &models.TaskAttachment{
-			TaskID: taskAttachment.TaskID,
-		}
-
 		f, err := file.Open()
 		if err != nil {
-			r.Errors = append(r.Errors, toAttachmentUploadError(err))
+			openErrors = append(openErrors, err)
 			continue
 		}
 		defer f.Close()
+		uploads = append(uploads, &models.AttachmentToUpload{Reader: f, Filename: file.Filename, Size: uint64(file.Size)})
+	}
 
-		err = ta.NewAttachment(s, f, file.Filename, uint64(file.Size), auth)
-		if err != nil {
-			r.Errors = append(r.Errors, toAttachmentUploadError(err))
-			continue
-		}
-		r.Success = append(r.Success, ta)
+	success, failures, err := models.UploadTaskAttachments(s, auth, taskAttachment.TaskID, uploads)
+	if err != nil {
+		_ = s.Rollback()
+		events.CleanupPending(s)
+		return err
 	}
 
 	if err := s.Commit(); err != nil {
 		_ = s.Rollback()
+		events.CleanupPending(s)
 		return err
 	}
+	events.DispatchPending(c.Request().Context(), s)
 
-	return c.JSON(http.StatusOK, r)
+	return c.JSON(http.StatusOK, webfiles.BuildUploadResult(success, append(openErrors, failures...)))
 }
 
 // GetTaskAttachment returns a task attachment to download for the user
@@ -146,12 +106,14 @@ func UploadTaskAttachment(c *echo.Context) error {
 // @Produce octet-stream
 // @Param id path int true "Task ID"
 // @Param attachmentID path int true "Attachment ID"
-// @Param preview_size query string false "The size of the preview image. Can be sm = 100px, md = 200px, lg = 400px or xl = 800px. If provided, a preview image will be returned if the attachment is an image."
+// @Param preview_size query string false "The size of the preview image. Can be sm = 100px, md = 200px, lg = 400px or xl = 800px. If provided, a preview image is returned instead of the attachment: a JPEG, or a PNG when the image has transparency."
 // @Security JWTKeyAuth
-// @Success 200 {file} blob "The attachment file."
+// @Success 200 {file} blob "The attachment file, or its preview when preview_size is provided."
 // @Failure 403 {object} models.Message "No access to this task."
 // @Failure 404 {object} models.Message "The task does not exist."
+// @Failure 422 {object} models.Message "preview_size is invalid (code 4039), or the attachment has no preview (code 4038)."
 // @Failure 500 {object} models.Message "Internal error"
+// @Failure 503 {object} models.Message "Too many previews are being generated, try again later."
 // @Router /tasks/{id}/attachments/{attachmentID} [get]
 func GetTaskAttachment(c *echo.Context) error {
 
@@ -160,82 +122,27 @@ func GetTaskAttachment(c *echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "No task ID provided").Wrap(err)
 	}
 
-	// Permissions check
 	auth, err := auth2.GetAuthFromClaims(c)
 	if err != nil {
 		return err
 	}
 
-	s := db.NewSession()
-	defer s.Close()
-
-	can, _, err := taskAttachment.CanRead(s, auth)
-	if err != nil {
-		_ = s.Rollback()
-		return err
-	}
-	if !can {
-		return echo.ErrForbidden
-	}
-
-	// Get the attachment incl file
-	err = taskAttachment.ReadOne(s, auth)
-	if err != nil {
-		_ = s.Rollback()
-		return err
-	}
-
-	// Open the file so its content is available for preview generation and download
-	err = taskAttachment.File.LoadFileByID()
-	if err != nil {
-		_ = s.Rollback()
-		return err
-	}
-
-	// If the preview query parameter is set, get the preview (cached or generate)
-	previewSize := models.GetPreviewSizeFromString(c.QueryParam("preview_size"))
-	if previewSize != models.PreviewSizeUnknown && strings.HasPrefix(taskAttachment.File.Mime, "image") {
-		previewFileBytes := taskAttachment.GetPreview(previewSize)
-		if previewFileBytes != nil {
-			return c.Blob(http.StatusOK, "image/png", previewFileBytes)
+	if c.QueryParams().Has("preview_size") {
+		previewSize := models.GetPreviewSizeFromString(c.QueryParam("preview_size"))
+		preview, err := models.GetTaskAttachmentPreview(c.Request().Context(), auth, taskAttachment.TaskID, taskAttachment.ID, previewSize)
+		if err != nil {
+			return err
 		}
+		webfiles.WriteAttachmentPreview(c.Response(), preview)
+		return nil
 	}
 
-	if err := s.Commit(); err != nil {
-		_ = s.Rollback()
+	file, err := models.GetTaskAttachmentForDownload(auth, taskAttachment.TaskID, taskAttachment.ID)
+	if err != nil {
 		return err
 	}
+	defer func() { _ = file.File.Close() }()
 
-	mimeToReturn := taskAttachment.File.Mime
-	if mimeToReturn == "" {
-		mimeToReturn = "application/octet-stream"
-	}
-
-	c.Response().Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{
-		"filename": taskAttachment.File.Name,
-	}))
-	c.Response().Header().Set("Content-Type", mimeToReturn)
-	c.Response().Header().Set("Content-Length", strconv.FormatUint(taskAttachment.File.Size, 10))
-	c.Response().Header().Set("Last-Modified", taskAttachment.File.Created.UTC().Format(http.TimeFormat))
-	// Override the global no-store directive so browsers can cache attachments.
-	// no-cache allows caching but requires revalidation via If-Modified-Since.
-	c.Response().Header().Set("Cache-Control", "no-cache")
-
-	if config.FilesType.GetString() == "s3" {
-		// Check If-Modified-Since and return 304 if the file hasn't changed.
-		// http.ServeContent handles this automatically for local files.
-		if ifModSince := c.Request().Header.Get("If-Modified-Since"); ifModSince != "" {
-			if t, parseErr := http.ParseTime(ifModSince); parseErr == nil && !taskAttachment.File.Created.UTC().After(t) {
-				return c.NoContent(http.StatusNotModified)
-			}
-		}
-
-		// s3 files cannot use http.ServeContent as it requires a Seekable file
-		// so we stream the file content directly to the response
-		_, err = io.Copy(c.Response(), taskAttachment.File.File)
-		return err
-	}
-
-	http.ServeContent(c.Response(), c.Request(), taskAttachment.File.Name, taskAttachment.File.Created, taskAttachment.File.File.(io.ReadSeeker))
+	webfiles.WriteFileDownload(c.Response(), c.Request(), file)
 	return nil
 }

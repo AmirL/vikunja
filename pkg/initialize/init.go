@@ -17,14 +17,17 @@
 package initialize
 
 import (
+	"context"
 	"time"
 
+	"code.vikunja.io/api/pkg/audit"
 	"code.vikunja.io/api/pkg/config"
 	"code.vikunja.io/api/pkg/cron"
 	"code.vikunja.io/api/pkg/db"
 	"code.vikunja.io/api/pkg/events"
 	"code.vikunja.io/api/pkg/files"
 	"code.vikunja.io/api/pkg/i18n"
+	"code.vikunja.io/api/pkg/license"
 	"code.vikunja.io/api/pkg/log"
 	"code.vikunja.io/api/pkg/mail"
 	"code.vikunja.io/api/pkg/migration"
@@ -32,10 +35,13 @@ import (
 	"code.vikunja.io/api/pkg/modules/auth/ldap"
 	"code.vikunja.io/api/pkg/modules/auth/openid"
 	"code.vikunja.io/api/pkg/modules/keyvalue"
+	migrationmodule "code.vikunja.io/api/pkg/modules/migration"
 	migrationHandler "code.vikunja.io/api/pkg/modules/migration/handler"
 	"code.vikunja.io/api/pkg/plugins"
+	_ "code.vikunja.io/api/pkg/plugins/yaegi" // register yaegi plugin loader
 	"code.vikunja.io/api/pkg/red"
 	"code.vikunja.io/api/pkg/user"
+	ws "code.vikunja.io/api/pkg/websocket"
 )
 
 // LightInit will only init config, redis, logger but no db connection.
@@ -80,7 +86,7 @@ func FullInitWithoutAsync() {
 	LightInit()
 
 	// Initialize the files handler
-	err := files.InitFileHandler()
+	err := files.InitFileHandler(context.Background())
 	if err != nil {
 		log.Fatalf("Could not init file handler: %s", err)
 	}
@@ -91,6 +97,16 @@ func FullInitWithoutAsync() {
 	// Set Engine
 	InitEngines()
 
+	// Initialize license validation — funds ongoing development of Vikunja.
+	// See the package comment in pkg/license/license.go before removing.
+	license.Init()
+
+	if config.AuditEnabled.GetBool() {
+		if err := audit.Init(); err != nil {
+			log.Fatalf("Could not initialize audit logging: %s", err)
+		}
+	}
+
 	// Start the mail daemon
 	mail.StartMailDaemon()
 
@@ -100,6 +116,9 @@ func FullInitWithoutAsync() {
 	// Check all OpenID Connect providers at startup
 	_, err = openid.GetAllProviders()
 	if err != nil {
+		if openid.IsErrDuplicateOIDCIssuer(err) {
+			log.Fatalf("OpenID Connect configuration error: %s", err)
+		}
 		log.Errorf("Error initializing OpenID Connect providers: %s", err)
 	}
 
@@ -120,20 +139,26 @@ func FullInit() {
 	models.RegisterReminderCron()
 	models.RegisterOverdueReminderCron()
 	models.RegisterUserDeletionCron()
+	models.RegisterTaskCleanupCron()
 	models.RegisterOldExportCleanupCron()
+	migrationmodule.RegisterImportUploadCleanupCron()
 	models.RegisterAddTaskToFilterViewCron()
 	user.RegisterTokenCleanupCron()
 	models.RegisterSessionCleanupCron()
 	user.RegisterDeletionNotificationCron()
 	openid.CleanupSavedOpenIDProviders()
 	openid.RegisterEmptyOpenIDTeamCleanupCron()
+	openid.RegisterProviderAvailabilityCron()
 	models.RegisterAPITokenExpiryCheckCron()
+
+	// Initialize WebSocket hub
+	ws.InitHub()
 
 	// Start processing events
 	go func() {
 		models.RegisterListeners()
-		user.RegisterListeners()
 		migrationHandler.RegisterListeners()
+		ws.RegisterListeners()
 		err := events.InitEvents()
 		if err != nil {
 			log.Fatal(err.Error())

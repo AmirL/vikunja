@@ -7,6 +7,7 @@
 		>
 			<BaseButton
 				class="trigger-button"
+				:aria-expanded="showNotifications"
 				@click.stop="showNotifications = !showNotifications"
 			>
 				<span class="is-sr-only">{{ $t('notification.title') }}</span>
@@ -24,33 +25,57 @@
 				ref="popup"
 				class="notifications-list"
 			>
-				<span class="head">{{ $t('notification.title') }}</span>
+				<div class="head">
+					<span>{{ $t('notification.title') }}</span>
+					<div class="actions">
+						<BaseButton
+							v-if="notifications.length > 0"
+							v-tooltip="$t('notification.clearAll')"
+							class="action-link"
+							:aria-label="$t('notification.clearAll')"
+							@click="clearAll"
+						>
+							<Icon icon="check-double" />
+						</BaseButton>
+						<BaseButton
+							v-tooltip="$t('notification.subscribeFeed')"
+							class="action-link"
+							:to="{name: 'user.settings.feeds'}"
+							@click="showNotifications = false"
+						>
+							<span class="is-sr-only">{{ $t('notification.subscribeFeed') }}</span>
+							<Icon icon="rss" />
+						</BaseButton>
+					</div>
+				</div>
 				<div
-					v-for="(n, index) in notifications"
+					v-for="n in notifications"
 					:key="n.id"
 					class="single-notification"
-					:class="{'is-clickable': notificationHasRoute(n)}"
-					@click="() => notificationHasRoute(n) && to(n, index)()"
+					:class="{'is-clickable': n.route}"
+					@click="to(n)"
 				>
 					<div
 						class="read-indicator"
-						:class="{'read': n.readAt !== null}"
-					/>
+						:class="{'read': n.read}"
+					>
+						<span class="is-sr-only">{{ n.read ? $t('notification.read') : $t('notification.unread') }}</span>
+					</div>
 					<User
-						v-if="n.notification.doer"
-						:user="n.notification.doer"
+						v-if="n.doer"
+						:user="n.doer"
 						:show-username="false"
 						:avatar-size="16"
 					/>
 					<div class="detail">
 						<div>
 							<span
-								v-if="n.notification.doer"
+								v-if="n.doer"
 								class="has-text-weight-bold mie-1"
 							>
-								{{ getDisplayName(n.notification.doer) }}
+								{{ n.doerName }}
 							</span>
-							{{ n.toText(userInfo) }}
+							{{ n.text }}
 						</div>
 						<span
 							v-tooltip="formatDateLong(n.created)"
@@ -61,9 +86,18 @@
 					</div>
 				</div>
 				<XButton
+					v-if="inbox.hasNextPage.value"
+					variant="tertiary"
+					class="mbs-2 is-fullwidth"
+					:loading="inbox.isFetchingNextPage.value"
+					@click="inbox.fetchNextPage()"
+				>
+					{{ $t('notification.loadMore') }}
+				</XButton>
+				<XButton
 					v-if="notifications.length > 0 && unreadNotifications > 0"
 					variant="tertiary"
-					class="mbs-2 is-fullwidth" 
+					class="mbs-2 is-fullwidth"
 					@click="markAllRead"
 				>
 					{{ $t('notification.markAllRead') }}
@@ -84,116 +118,79 @@
 
 <script lang="ts" setup>
 import {computed, onMounted, onUnmounted, ref} from 'vue'
-import {useRouter, isNavigationFailure, NavigationFailureType, RouteLocationRaw} from 'vue-router'
-
-import NotificationService from '@/services/notification'
+import {useRouter, isNavigationFailure, NavigationFailureType} from 'vue-router'
+import {useInfiniteQuery} from '@tanstack/vue-query'
+import {
+	notificationsQuery,
+	useMarkNotificationReadMutation,
+	useMarkAllNotificationsReadMutation,
+	useClearNotificationsMutation,
+} from '@/client/queries/notifications'
+import {notificationDoer, notificationRoute, notificationText} from '@/helpers/notification'
+import {parseDateOrNull} from '@/helpers/parseDateOrNull'
 import BaseButton from '@/components/base/BaseButton.vue'
 import CustomTransition from '@/components/misc/CustomTransition.vue'
 import User from '@/components/misc/User.vue'
-import {NOTIFICATION_NAMES as names, type INotification} from '@/modelTypes/INotification'
 import {closeWhenClickedOutside} from '@/helpers/closeWhenClickedOutside'
 import {formatDateLong, formatDisplayDate} from '@/helpers/time/formatDate'
-import {getDisplayName} from '@/models/user'
+import {getDisplayName} from '@/helpers/user'
 import {useAuthStore} from '@/stores/auth'
+import {useWebSocket} from '@/composables/useWebSocket'
 import XButton from '@/components/input/Button.vue'
-import {success} from '@/message'
-import {useI18n} from 'vue-i18n'
 
-const LOAD_NOTIFICATIONS_INTERVAL = 10000
-
+const {authenticated, isAwaitingFirstConnection} = useWebSocket()
 const authStore = useAuthStore()
 const router = useRouter()
-const {t} = useI18n()
-
-const allNotifications = ref<INotification[]>([])
+const inbox = useInfiniteQuery(computed(() => ({
+	...notificationsQuery(),
+	// A fetch before the socket subscribes would be refetched by the subscribe sweep.
+	enabled: !isAwaitingFirstConnection(),
+	refetchInterval: authenticated.value ? false : 10_000,
+})))
+const readMutation = useMarkNotificationReadMutation()
+const readAllMutation = useMarkAllNotificationsReadMutation()
+const clearMutation = useClearNotificationsMutation()
+// A notification arriving between page loads shifts the offsets and repeats a row on the next page.
+const loadedNotifications = computed(() => [...new Map((inbox.data.value?.pages ?? [])
+	.flatMap(page => page.items)
+	.map(n => [n.id, n] as const)).values()])
+const notifications = computed(() => loadedNotifications.value.flatMap(n => {
+	if (!n.name || !n.id) return []
+	const doer = notificationDoer(n)
+	return [{
+		id: n.id,
+		created: n.created,
+		doer,
+		doerName: getDisplayName(doer),
+		text: notificationText(n, authStore.info),
+		route: notificationRoute(n),
+		read: parseDateOrNull(n.read_at) !== null,
+	}]
+}))
+type NotificationRow = typeof notifications.value[number]
+const unreadNotifications = computed(() => notifications.value.filter(n => !n.read).length)
 const showNotifications = ref(false)
-const popup = ref(null)
+const popup = ref<HTMLElement | null>(null)
 
-const unreadNotifications = computed(() => {
-	return notifications.value.filter(n => n.readAt === null).length
-})
-const notifications = computed(() => {
-	return allNotifications.value ? allNotifications.value.filter(n => n.name !== '') : []
-})
-const userInfo = computed(() => authStore.info)
+onMounted(() => document.addEventListener('click', hidePopup))
+onUnmounted(() => document.removeEventListener('click', hidePopup))
 
-let interval: ReturnType<typeof setInterval>
-
-onMounted(() => {
-	loadNotifications()
-	document.addEventListener('click', hidePopup)
-	document.addEventListener('visibilitychange', loadNotifications)
-	interval = setInterval(loadNotifications, LOAD_NOTIFICATIONS_INTERVAL)
-})
-
-onUnmounted(() => {
-	document.removeEventListener('click', hidePopup)
-	document.removeEventListener('visibilitychange', loadNotifications)
-	clearInterval(interval)
-})
-
-async function loadNotifications() {
-	if (document.visibilityState !== 'visible') {
-		return
-	}
-	// We're recreating the notification service here to make sure it uses the latest api user token
-	const notificationService = new NotificationService()
-	allNotifications.value = await notificationService.getAll()
-}
-
-function hidePopup(e) {
-	if (showNotifications.value) {
+function hidePopup(e: MouseEvent) {
+	if (showNotifications.value && popup.value !== null) {
 		closeWhenClickedOutside(e, popup.value, () => showNotifications.value = false)
 	}
 }
 
-function getNotificationRoute(n: INotification): RouteLocationRaw | null {
-	switch (n.name) {
-		case names.TASK_COMMENT:
-		case names.TASK_ASSIGNED:
-		case names.TASK_REMINDER:
-		case names.TASK_MENTIONED:
-			return {name: 'task.detail', params: {id: (n.notification as {task: {id: number}}).task.id}}
-		case names.PROJECT_CREATED:
-			return {name: 'task.index', params: {projectId: (n.notification as {project: {id: number}}).project.id}}
-		case names.TEAM_MEMBER_ADDED:
-			return {name: 'teams.edit', params: {id: (n.notification as {team: {id: number}}).team.id}}
-		default:
-			return null
-	}
+async function to(n: NotificationRow) {
+	if (!n.route) return
+	readMutation.mutate(n.id)
+	showNotifications.value = false
+	const failure = await router.push(n.route)
+	if (isNavigationFailure(failure, NavigationFailureType.duplicated)) router.go(0)
 }
 
-function notificationHasRoute(n: INotification): boolean {
-	return getNotificationRoute(n) !== null
-}
-
-function to(n: INotification, index: number) {
-	return async () => {
-		const route = getNotificationRoute(n)
-		if (route === null) return
-		
-		const failure = await router.push(route)
-		if (isNavigationFailure(failure, NavigationFailureType.duplicated)) {
-			router.go(0)
-		}
-
-		n.read = true
-		if (allNotifications.value[index]) {
-			const notificationService = new NotificationService()
-			Object.assign(allNotifications.value[index], await notificationService.update(n))
-		}
-
-		showNotifications.value = false
-	}
-}
-
-async function markAllRead() {
-	const notificationService = new NotificationService()
-	await notificationService.markAllRead()
-	success({message: t('notification.markAllReadSuccess')})
-	
-	notifications.value.forEach(n => n.readAt = new Date())
-}
+function markAllRead() { readAllMutation.mutate() }
+function clearAll() { clearMutation.mutate() }
 </script>
 
 <style lang="scss" scoped>
@@ -240,6 +237,25 @@ async function markAllRead() {
 			font-family: $vikunja-font;
 			font-size: 1rem;
 			padding: .5rem;
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+
+			.actions {
+				display: flex;
+				align-items: center;
+				gap: .5rem;
+			}
+
+			.action-link {
+				color: var(--grey-500);
+				transition: color $transition;
+
+				&:hover,
+				&:focus {
+					color: var(--primary);
+				}
+			}
 		}
 
 		.single-notification {

@@ -17,12 +17,20 @@
 package vikunjafile
 
 import (
+	"archive/zip"
+	"bytes"
+	"net/http"
 	"os"
 	"testing"
 
+	"code.vikunja.io/api/pkg/config"
 	"code.vikunja.io/api/pkg/db"
+	"code.vikunja.io/api/pkg/events"
+	"code.vikunja.io/api/pkg/models"
+	"code.vikunja.io/api/pkg/modules/migration"
 	"code.vikunja.io/api/pkg/user"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -74,6 +82,119 @@ func TestVikunjaFileMigrator_Migrate(t *testing.T) {
 			"created_by_id": u.ID,
 		}, false)
 	})
+	t.Run("rejects attachment with forged size smaller than content", func(t *testing.T) {
+		// Regression: GHSA-qh78-rvg3-cv54. Zip entry carries 2 MB of
+		// content but data.json claims size: 0, bypassing the 1 MB cap.
+		db.LoadAndAssertFixtures(t)
+
+		oldMax := config.FilesMaxSize.GetString()
+		config.FilesMaxSize.Set("1MB")
+		defer func() {
+			config.FilesMaxSize.Set(oldMax)
+			_ = config.SetMaxFileSizeMBytesFromString(oldMax)
+		}()
+		require.NoError(t, config.SetMaxFileSizeMBytesFromString("1MB"))
+
+		payload := make([]byte, 2*1024*1024)
+
+		dataJSON := `[{
+			"id": 1,
+			"title": "evil project",
+			"tasks": [{
+				"id": 1,
+				"title": "evil task",
+				"attachments": [{
+					"id": 1,
+					"file": {"id": 1, "name": "evil.bin", "size": 0}
+				}]
+			}],
+			"views": []
+		}]`
+
+		var zipBuf bytes.Buffer
+		zw := zip.NewWriter(&zipBuf)
+
+		vf, err := zw.Create("VERSION")
+		require.NoError(t, err)
+		_, err = vf.Write([]byte("dev"))
+		require.NoError(t, err)
+
+		df, err := zw.Create("data.json")
+		require.NoError(t, err)
+		_, err = df.Write([]byte(dataJSON))
+		require.NoError(t, err)
+
+		ff, err := zw.Create("files/1")
+		require.NoError(t, err)
+		_, err = ff.Write(payload)
+		require.NoError(t, err)
+
+		require.NoError(t, zw.Close())
+
+		m := &FileMigrator{}
+		u := &user.User{ID: 1}
+
+		reader := bytes.NewReader(zipBuf.Bytes())
+		err = m.Migrate(u, reader, int64(reader.Len()))
+
+		// create_from_structure.go skips the oversized attachment via
+		// `continue`, so Migrate succeeds for the rest of the project.
+		require.NoError(t, err)
+
+		// Forged 0-size row was the pre-fix outcome; assert neither
+		// size ends up persisted.
+		db.AssertMissing(t, "files", map[string]interface{}{
+			"name": "evil.bin",
+			"size": 2 * 1024 * 1024,
+		})
+		db.AssertMissing(t, "files", map[string]interface{}{
+			"name": "evil.bin",
+			"size": 0,
+		})
+	})
+	t.Run("dispatches events queued while importing saved filters", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+
+		var zipBuf bytes.Buffer
+		zw := zip.NewWriter(&zipBuf)
+		for name, content := range map[string]string{
+			"VERSION":      "dev",
+			"data.json":    "[]",
+			"filters.json": `[{"title":"imported filter","filters":{"filter":"done = false"}}]`,
+		} {
+			w, err := zw.Create(name)
+			require.NoError(t, err)
+			_, err = w.Write([]byte(content))
+			require.NoError(t, err)
+		}
+		require.NoError(t, zw.Close())
+
+		m := &FileMigrator{}
+		u := &user.User{ID: 1}
+		reader := bytes.NewReader(zipBuf.Bytes())
+
+		events.ClearDispatchedEvents()
+		require.NoError(t, m.Migrate(u, reader, int64(reader.Len())))
+
+		s := db.NewSession()
+		defer s.Close()
+		sf := &models.SavedFilter{}
+		has, err := s.Where("title = ? AND owner_id = ?", "imported filter", u.ID).Get(sf)
+		require.NoError(t, err)
+		require.True(t, has)
+		filterViewIDs := []int64{}
+		require.NoError(t, s.Table("project_views").Where("project_id = ?", -sf.ID-1).Cols("id").Find(&filterViewIDs))
+		require.NotEmpty(t, filterViewIDs)
+
+		dispatched := events.GetDispatchedEvents((&models.TaskPositionsRecalculatedEvent{}).Name())
+		require.NotEmpty(t, dispatched)
+		for _, e := range dispatched {
+			recalculated, ok := e.(*models.TaskPositionsRecalculatedEvent)
+			require.True(t, ok, "dispatched %T", e)
+			require.NotEmpty(t, recalculated.NewTaskPositions)
+			assert.Contains(t, filterViewIDs, recalculated.NewTaskPositions[0].ProjectViewID)
+		}
+	})
 	t.Run("should not accept an old import", func(t *testing.T) {
 		db.LoadAndAssertFixtures(t)
 
@@ -92,6 +213,28 @@ func TestVikunjaFileMigrator_Migrate(t *testing.T) {
 
 		err = m.Migrate(u, f, s.Size())
 		require.Error(t, err)
-		require.ErrorContainsf(t, err, "export was created with an older version", "Invalid error message")
+		var unsupported *migration.ErrImportFromUnsupportedVersion
+		require.ErrorAs(t, err, &unsupported)
+	})
+	t.Run("should reject a zip without a data file", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+
+		var zipBuf bytes.Buffer
+		zw := zip.NewWriter(&zipBuf)
+		w, err := zw.Create("VERSION")
+		require.NoError(t, err)
+		_, err = w.Write([]byte("dev"))
+		require.NoError(t, err)
+		require.NoError(t, zw.Close())
+
+		m := &FileMigrator{}
+		u := &user.User{ID: 1}
+		reader := bytes.NewReader(zipBuf.Bytes())
+
+		err = m.Migrate(u, reader, int64(reader.Len()))
+		var noDataFile *migration.ErrNoDataFileInZip
+		require.ErrorAs(t, err, &noDataFile)
+		assert.Equal(t, http.StatusBadRequest, noDataFile.HTTPError().HTTPCode)
+		assert.Equal(t, migration.ErrCodeNoDataFileInZip, noDataFile.HTTPError().Code)
 	})
 }

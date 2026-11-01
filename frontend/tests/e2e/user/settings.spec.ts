@@ -1,4 +1,5 @@
 import {test, expect} from '../../support/fixtures'
+import {updateUserSettings} from '../../support/updateUserSettings'
 
 test.describe('User Settings', () => {
 	test('Changes the user avatar', async ({authenticatedPage: page}) => {
@@ -96,17 +97,69 @@ test.describe('User Settings', () => {
 		const nameInput = page.locator('.general-settings input.input').first()
 		await expect(nameInput).toBeVisible({timeout: 10000})
 		await expect(nameInput).toBeEnabled()
+		await nameInput.fill('Settings Migration')
+		await page.locator('[data-cy=saveGeneralSettings]').click()
+		await expect(page.locator('.global-notification')).toContainText('Success')
+		await expect(page.locator('.username')).toHaveText('Settings Migration')
+		await page.reload()
+		await expect(nameInput).toHaveValue('Settings Migration')
+	})
 
-		// Clear and type to ensure Vue's reactivity is triggered
-		await nameInput.clear()
-		await nameInput.pressSequentially('Lorem Ipsum', {delay: 10})
+	test('Keeps a setting changed elsewhere while the form is open', async ({authenticatedPage: page, apiContext, userToken}) => {
+		await page.goto('/user/settings/general')
+		await page.waitForLoadState('networkidle')
+
+		const nameInput = page.locator('.general-settings input.input').first()
+		await expect(nameInput).toBeVisible({timeout: 10000})
+		await expect(nameInput).toBeEnabled()
+
+		await updateUserSettings(apiContext, userToken, {frontend_settings: {sidebar_width: 422}})
+
+		await nameInput.fill('Edited While Stale')
+		await page.locator('[data-cy=saveGeneralSettings]').click()
+		await expect(page.locator('.global-notification')).toContainText('Success')
+
+		const storedUser = await apiContext.get('user', {headers: {Authorization: `Bearer ${userToken}`}})
+		const {settings} = await storedUser.json()
+		expect(settings.name).toBe('Edited While Stale')
+		expect(settings.frontend_settings.sidebar_width).toBe(422)
+	})
+
+	test('Updates the week start day', async ({authenticatedPage: page, apiContext, userToken}) => {
+		await page.goto('/user/settings/general')
+		await page.waitForLoadState('networkidle')
+
+		// Wait for the settings page to be fully loaded and find the select by its label
+		const weekStartSelect = page.getByLabel('Week starts on')
+		await weekStartSelect.scrollIntoViewIfNeeded()
+		await expect(weekStartSelect).toBeVisible({timeout: 10000})
+
+		// Select Wednesday (value 3)
+		await weekStartSelect.selectOption({value: '3'})
 
 		// The save button only appears when isDirty becomes true (settings changed)
 		const saveButton = page.locator('[data-cy="saveGeneralSettings"]')
 		await expect(saveButton).toBeVisible({timeout: 10000})
+
+		// Intercept the API request to verify it contains the correct setting
+		const settingsUpdatePromise = page.waitForResponse(response =>
+			response.url().includes('/api/v2/user/settings/general') && response.request().method() === 'PATCH',
+		)
+
 		await saveButton.click()
 
+		const response = await settingsUpdatePromise
+		expect(response.ok()).toBe(true)
+		const storedUser = await apiContext.get('user', {headers: {Authorization: `Bearer ${userToken}`}})
+		expect((await storedUser.json()).settings.week_start).toBe(3)
+
 		await expect(page.locator('.global-notification')).toContainText('Success')
-		await expect(page.locator('.navbar .username-dropdown-trigger .username')).toContainText('Lorem Ipsum')
+
+		// Verify the setting was saved by reloading the page
+		await page.reload()
+		await page.waitForLoadState('networkidle')
+		const weekStartSelectAfterReload = page.getByLabel('Week starts on')
+		await weekStartSelectAfterReload.scrollIntoViewIfNeeded()
+		await expect(weekStartSelectAfterReload).toHaveValue('3')
 	})
 })

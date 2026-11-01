@@ -1,6 +1,7 @@
 import {library} from '@fortawesome/fontawesome-svg-core'
 import {
 	faAlignLeft,
+	faAngleLeft,
 	faAngleRight,
 	faAnglesUp,
 	faArchive,
@@ -37,6 +38,7 @@ import {
 	faEyeSlash,
 	faFile,
 	faFileImage,
+	faFilePdf,
 	faFillDrip,
 	faFilter,
 	faForward,
@@ -49,6 +51,7 @@ import {
 	faList,
 	faListOl,
 	faLock,
+	faMinus,
 	faPaperclip,
 	faPaste,
 	faPen,
@@ -57,6 +60,7 @@ import {
 	faPlay,
 	faPlus,
 	faPowerOff,
+	faRss,
 	faSearch,
 	faShareAlt,
 	faSignOutAlt,
@@ -72,6 +76,7 @@ import {
 	faTimes,
 	faTrashAlt,
 	faUser,
+	faUserEdit,
 	faUsers,
 	faQuoteRight,
 	faListUl,
@@ -81,7 +86,12 @@ import {
 	faUnlink,
 	faParagraph,
 	faTable,
+	faVolumeHigh,
 	faX, faArrowTurnDown, faListCheck, faXmark, faXmarksLines, faFont, faRulerHorizontal, faUnderline,
+	faChevronUp,
+	faUmbrellaBeach,
+	faCalendarPlus,
+	faFlagCheckered,
 } from '@fortawesome/free-solid-svg-icons'
 import {
 	faBellSlash,
@@ -95,6 +105,7 @@ import {
 	faSun,
 	faTimesCircle,
 	faCircleQuestion, faFaceLaugh,
+	faCalendarCheck,
 } from '@fortawesome/free-regular-svg-icons'
 import {FontAwesomeIcon} from '@fortawesome/vue-fontawesome'
 
@@ -111,12 +122,14 @@ library.add(faSquareCheck)
 library.add(faTable)
 library.add(faFile)
 library.add(faFileImage)
+library.add(faFilePdf)
 library.add(faCheckSquare)
 library.add(faStrikethrough)
 library.add(faCode)
 library.add(faQuoteRight)
 library.add(faListUl)
 library.add(faAlignLeft)
+library.add(faAngleLeft)
 library.add(faAngleRight)
 library.add(faArchive)
 library.add(faArrowLeft)
@@ -157,6 +170,7 @@ library.add(faLayerGroup)
 library.add(faList)
 library.add(faListOl)
 library.add(faLock)
+library.add(faMinus)
 library.add(faPaperclip)
 library.add(faPaste)
 library.add(faPen)
@@ -165,6 +179,7 @@ library.add(faPercent)
 library.add(faPlay)
 library.add(faPlus)
 library.add(faPowerOff)
+library.add(faRss)
 library.add(faSave)
 library.add(faSearch)
 library.add(faShareAlt)
@@ -184,7 +199,9 @@ library.add(faTimes)
 library.add(faTimesCircle)
 library.add(faTrashAlt)
 library.add(faUser)
+library.add(faUserEdit)
 library.add(faUsers)
+library.add(faVolumeHigh)
 library.add(faArrowDownShortWide)
 library.add(faArrowUpFromBracket)
 library.add(faArrowUpShortWide)
@@ -198,6 +215,11 @@ library.add(faXmarksLines)
 library.add(faFont)
 library.add(faRulerHorizontal)
 library.add(faUnderline)
+library.add(faChevronUp)
+library.add(faUmbrellaBeach)
+library.add(faCalendarPlus)
+library.add(faFlagCheckered)
+library.add(faCalendarCheck)
 library.add(faFaceLaugh)
 library.add(faExclamation)
 library.add(faArrowUpRightFromSquare)

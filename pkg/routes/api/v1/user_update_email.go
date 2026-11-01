@@ -54,6 +54,10 @@ func UpdateUserEmail(c *echo.Context) (err error) {
 		return models.ErrInvalidModel{Err: err}
 	}
 
+	if err := c.Validate(emailUpdate); err != nil {
+		return err
+	}
+
 	emailUpdate.User, err = user.GetCurrentUser(c)
 	if err != nil {
 		return err
@@ -62,17 +66,7 @@ func UpdateUserEmail(c *echo.Context) (err error) {
 	s := db.NewSession()
 	defer s.Close()
 
-	emailUpdate.User, err = user.CheckUserCredentials(s, &user.Login{
-		Username: emailUpdate.User.Username,
-		Password: emailUpdate.Password,
-	})
-	if err != nil {
-		_ = s.Rollback()
-		return err
-	}
-
-	err = user.UpdateEmail(s, emailUpdate)
-	if err != nil {
+	if err := user.ChangeUserEmail(c.Request().Context(), s, emailUpdate.User, emailUpdate.Password, emailUpdate.NewEmail); err != nil {
 		_ = s.Rollback()
 		return err
 	}
@@ -82,5 +76,5 @@ func UpdateUserEmail(c *echo.Context) (err error) {
 		return err
 	}
 
-	return c.JSON(http.StatusOK, models.Message{Message: "We sent you email with a link to confirm your email address."})
+	return c.JSON(http.StatusOK, models.Message{Message: user.EmailUpdateMessage()})
 }

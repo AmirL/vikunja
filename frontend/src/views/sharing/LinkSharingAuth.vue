@@ -3,10 +3,7 @@
 		<Message v-if="loading">
 			{{ $t('sharing.authenticating') }}
 		</Message>
-		<div
-			v-if="authenticateWithPassword"
-			class="box"
-		>
+		<Card v-if="authenticateWithPassword">
 			<p class="pbe-2">
 				{{ $t('sharing.passwordRequired') }}
 			</p>
@@ -15,6 +12,8 @@
 				v-model="password"
 				v-focus
 				type="password"
+				autocomplete="off"
+				:label="$t('user.auth.password')"
 				:placeholder="$t('user.auth.passwordPlaceholder')"
 				@keyup.enter.prevent="authenticate()"
 			/>
@@ -25,24 +24,25 @@
 			>
 				{{ $t('user.auth.login') }}
 			</XButton>
-
-			<Message
-				v-if="errorMessage !== ''"
-				variant="danger"
-				class="mbs-4"
-			>
-				{{ errorMessage }}
-			</Message>
-		</div>
+		</Card>
+		<Message
+			v-if="errorMessage !== ''"
+			variant="danger"
+			class="mbs-4"
+		>
+			{{ errorMessage }}
+		</Message>
 	</div>
 </template>
 
 <script lang="ts" setup>
+import type {VikunjaErrorModel} from '@/client/generated'
 import {ref, computed} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
 import {useI18n} from 'vue-i18n'
 import {useTitle} from '@vueuse/core'
 
+import Card from '@/components/misc/Card.vue'
 import Message from '@/components/misc/Message.vue'
 import FormField from '@/components/input/FormField.vue'
 import {LINK_SHARE_HASH_PREFIX} from '@/constants/linkShareHash'
@@ -50,7 +50,6 @@ import {LINK_SHARE_HASH_PREFIX} from '@/constants/linkShareHash'
 import {useBaseStore} from '@/stores/base'
 import {useAuthStore} from '@/stores/auth'
 import {useRedirectToLastVisited} from '@/composables/useRedirectToLastVisited'
-import type {IProject} from '@/modelTypes/IProject.ts'
 
 const {t} = useI18n({useScope: 'global'})
 useTitle(t('sharing.authenticating'))
@@ -69,7 +68,7 @@ function useAuth() {
 
 	const authLinkShare = computed(() => authStore.authLinkShare)
 
-	function redirectToProject(projectId: IProject['id']) {
+	function redirectToProject(projectId: number) {
 		const hash = LINK_SHARE_HASH_PREFIX + route.params.share
 
 		const viewId =
@@ -104,7 +103,6 @@ function useAuth() {
 	}
 
 	async function authenticate() {
-		authenticateWithPassword.value = false
 		errorMessage.value = ''
 
 		if (authLinkShare.value) {
@@ -118,7 +116,7 @@ function useAuth() {
 
 		try {
 			const {project_id: projectId} = await authStore.linkShareAuth({
-				hash: route.params.share,
+				hash: String(route.params.share),
 				password: password.value,
 			})
 			const logoVisible = route.query.logoVisible
@@ -127,36 +125,38 @@ function useAuth() {
 			baseStore.setLogoVisible(logoVisible)
 
 			return redirectToProject(projectId)
-		} catch (e) {
-			if (e?.response?.data?.code === 13001) {
+		} catch (cause) {
+			const e = cause as VikunjaErrorModel
+			if (e?.code === 13001) {
 				authenticateWithPassword.value = true
 				return
 			}
 
 			// Handle generic 403 errors that might occur after initial auth
-			if (e?.response?.status === 403 && !e?.response?.data?.code) {
+			if (e?.status === 403 && !e?.code) {
 				errorMessage.value = t('sharing.accessDenied')
 				authenticateWithPassword.value = false
 				return
 			}
 			
 			// Handle network/server errors
-			if (e?.response?.status >= 500 || !e?.response) {
+			if ((e?.status ?? 0) >= 500 || !e?.status) {
 				errorMessage.value = t('sharing.serverError')
 				authenticateWithPassword.value = false
 				return
 			}
 			
-			// Log unexpected errors for debugging
-			console.error('Link share authentication error:', e)
+			// Log only status and code; authentication failures can include secrets.
+			console.error('Link share authentication error:', e?.status, e?.code)
 
 			// TODO: Put this logic in a global errorMessage handler method which checks all auth codes
 			let err = t('sharing.error')
-			if (e?.response?.data?.message) {
-				err = e.response.data.message
+			if (e?.detail) {
+				err = e.detail
 			}
-			if (e?.response?.data?.code === 13002) {
+			if (e?.code === 13002) {
 				err = t('sharing.invalidPassword')
+				authenticateWithPassword.value = true
 			}
 			errorMessage.value = err
 		} finally {

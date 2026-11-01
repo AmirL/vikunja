@@ -2,15 +2,23 @@
 	<div
 		class="user"
 		:class="{'is-inline': isInline}"
+		:style="{'--avatar-size': `${avatarSize}px`}"
 	>
-		<img
-			v-tooltip="displayName"
-			:height="avatarSize"
-			:src="avatarSrc"
-			:width="avatarSize"
-			:alt="'Avatar of ' + displayName"
-			class="avatar"
-		>
+		<span class="avatar-wrapper">
+			<UserAvatar
+				v-tooltip="displayName"
+				:user="user"
+				:size="avatarSize"
+				:alt="showUsername ? '' : t('misc.avatarOfUser', {user: displayName})"
+				class="avatar"
+			/>
+			<span
+				v-if="isBot"
+				v-tooltip="botBadgeLabel"
+				class="bot-badge"
+				:aria-label="botBadgeLabel"
+			>B</span>
+		</span>
 		<span
 			v-if="showUsername"
 			class="username"
@@ -19,13 +27,15 @@
 </template>
 
 <script lang="ts" setup>
-import {computed, ref, watch} from 'vue'
+import {computed} from 'vue'
+import {useI18n} from 'vue-i18n'
 
-import {fetchAvatarBlobUrl, getDisplayName} from '@/models/user'
-import type {IUser} from '@/modelTypes/IUser'
+import UserAvatar from '@/components/misc/UserAvatar.vue'
+import {getDisplayName} from '@/helpers/user'
+import type {User as IUser} from '@/client/generated'
 
 const props = withDefaults(defineProps<{
-	user: IUser,
+	user: Pick<IUser, 'name' | 'username' | 'bot_owner_id' | 'bot_owner'> & {botOwnerId?: number},
 	showUsername?: boolean,
 	avatarSize?: number,
 	isInline?: boolean,
@@ -35,14 +45,13 @@ const props = withDefaults(defineProps<{
 	isInline: false,
 })
 
+const {t} = useI18n({useScope: 'global'})
+
 const displayName = computed(() => getDisplayName(props.user))
-const avatarSrc = ref('')
-
-async function loadAvatar() {
-	avatarSrc.value = await fetchAvatarBlobUrl(props.user, props.avatarSize)
-}
-
-watch(() => [props.user, props.avatarSize], loadAvatar, { immediate: true })
+const isBot = computed(() => (props.user.bot_owner_id ?? props.user.botOwnerId ?? 0) > 0)
+const botBadgeLabel = computed(() => props.user.bot_owner
+	? t('user.settings.bots.badgeOwner', {user: getDisplayName(props.user.bot_owner)})
+	: t('user.settings.bots.badge'))
 </script>
 
 <style lang="scss" scoped>
@@ -55,9 +64,41 @@ watch(() => [props.user, props.avatarSize], loadAvatar, { immediate: true })
 	}
 }
 
+.avatar-wrapper {
+	position: relative;
+	display: inline-flex;
+	flex-shrink: 0;
+	margin-inline-end: .5rem;
+}
+
 .avatar {
+	inline-size: var(--avatar-size);
+	block-size: var(--avatar-size);
 	border-radius: 100%;
 	vertical-align: middle;
-	margin-inline-end: .5rem;
+}
+
+.bot-badge {
+	position: absolute;
+	inset-block-end: 0;
+	inset-inline-start: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	inline-size: 40%;
+	block-size: 40%;
+	min-inline-size: 14px;
+	min-block-size: 14px;
+	max-inline-size: 22px;
+	max-block-size: 22px;
+	font-size: .65rem;
+	font-weight: 700;
+	line-height: 1;
+	color: var(--white);
+	background: var(--primary);
+	border: 2px solid var(--white);
+	border-radius: 100%;
+	text-transform: uppercase;
+	pointer-events: auto;
 }
 </style>

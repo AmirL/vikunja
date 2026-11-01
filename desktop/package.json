@@ -5,22 +5,31 @@
   "main": "main.js",
   "repository": "https://code.vikunja.io/desktop",
   "license": "GPL-3.0-or-later",
-  "packageManager": "pnpm@10.28.1",
+  "packageManager": "pnpm@11.27.0",
   "author": {
     "email": "maintainers@vikunja.io",
     "name": "Vikunja Team"
   },
   "homepage": "https://vikunja.io",
   "scripts": {
+    "build:frontend": "cd ../frontend && pnpm run build && cd ../desktop && rm -rf frontend && cp -r ../frontend/dist frontend",
     "start": "electron .",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --publish never"
   },
   "build": {
     "appId": "io.vikunja.desktop",
+    "files": [
+      "**/*",
+      "preload-quick-entry.js"
+    ],
     "productName": "Vikunja Desktop",
     "artifactName": "${productName}-${version}.${ext}",
     "icon": "build/icon.icns",
+    "protocols": {
+      "name": "Vikunja Desktop",
+      "schemes": ["vikunja-desktop"]
+    },
     "linux": {
       "target": [
         "deb",
@@ -45,6 +54,7 @@
     },
     "mac": {
       "category": "public.app-category.productivity",
+      "identity": "-",
       "target": [
         "dmg",
         "zip"
@@ -52,22 +62,11 @@
     }
   },
   "devDependencies": {
-    "electron": "40.8.5",
-    "electron-builder": "26.8.1",
-    "unzipper": "0.12.3"
+    "electron": "43.8.1",
+    "electron-builder": "26.15.3",
+    "unzipper": "0.12.5"
   },
   "dependencies": {
     "express": "5.2.1"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron"
-    ],
-    "overrides": {
-      "minimatch": "^10.2.3",
-      "tar": "^7.5.11",
-      "@tootallnate/once": "^3.0.1",
-      "picomatch": ">=4.0.4"
-    }
   }
 }

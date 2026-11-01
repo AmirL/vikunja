@@ -17,14 +17,15 @@
 package models
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"time"
 
 	"code.vikunja.io/api/pkg/config"
 	"code.vikunja.io/api/pkg/cron"
 	"code.vikunja.io/api/pkg/db"
+	"code.vikunja.io/api/pkg/events"
 	"code.vikunja.io/api/pkg/log"
+	"code.vikunja.io/api/pkg/user"
 	"code.vikunja.io/api/pkg/utils"
 	"code.vikunja.io/api/pkg/web"
 
@@ -36,23 +37,27 @@ import (
 // Session represents an active user session with a refresh token.
 type Session struct {
 	// The session UUID. Embedded in JWTs as the `sid` claim.
-	ID string `xorm:"varchar(36) not null unique pk" json:"id" param:"session"`
+	ID string `xorm:"varchar(36) not null unique pk" json:"id" param:"session" readOnly:"true" doc:"The session UUID; embedded in JWTs as the sid claim."`
 	// The owning user.
 	UserID int64 `xorm:"bigint not null index" json:"-"`
 	// SHA-256 hash of the refresh token. Used for lookup on refresh.
 	TokenHash string `xorm:"varchar(64) not null unique index" json:"-"`
 	// The cleartext refresh token. Only populated on session creation, never stored.
-	RefreshToken string `xorm:"-" json:"refresh_token,omitempty"`
+	RefreshToken string `xorm:"-" json:"refresh_token,omitempty" readOnly:"true" doc:"The cleartext refresh token; returned only once by the login flow, never on listing."`
 	// User-Agent string from the login request.
-	DeviceInfo string `xorm:"text" json:"device_info"`
+	DeviceInfo string `xorm:"text" json:"device_info" readOnly:"true" doc:"User-Agent string captured from the login request."`
 	// IP address from the login request.
-	IPAddress string `xorm:"varchar(100)" json:"ip_address"`
+	IPAddress string `xorm:"varchar(100)" json:"ip_address" readOnly:"true" doc:"IP address captured from the login request."`
 	// Whether this is a "remember me" session (controls max refresh lifetime).
 	IsLongSession bool `xorm:"not null default false" json:"-"`
+	// Raw OIDC ID token, kept so logout can replay it as id_token_hint. Empty for non-OIDC sessions.
+	OIDCIDToken string `xorm:"text" json:"-"`
+	// OIDC provider that created this session, used to find its end-session endpoint at logout.
+	OIDCProviderKey string `xorm:"varchar(250)" json:"-"`
 	// When this session was last refreshed.
-	LastActive time.Time `xorm:"not null" json:"last_active"`
+	LastActive time.Time `xorm:"not null" json:"last_active" readOnly:"true" doc:"When this session was last refreshed."`
 	// When this session was created (login time).
-	Created time.Time `xorm:"created not null" json:"created"`
+	Created time.Time `xorm:"created not null" json:"created" readOnly:"true" doc:"When this session was created (login time)."`
 
 	web.Permissions `xorm:"-" json:"-"`
 	web.CRUDable    `xorm:"-" json:"-"`
@@ -66,8 +71,7 @@ func (*Session) TableName() string {
 // No salt needed because refresh tokens are high-entropy random strings,
 // not human passwords — rainbow tables and dictionary attacks don't apply.
 func HashSessionToken(token string) string {
-	h := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(h[:])
+	return utils.Sha256Hex(token)
 }
 
 // generateHashedToken creates a cryptographically random token and returns both
@@ -81,9 +85,17 @@ func generateHashedToken() (rawToken, hash string, err error) {
 	return rawToken, HashSessionToken(rawToken), nil
 }
 
+// SessionOIDCData carries the OIDC metadata persisted on a session so an
+// RP-Initiated Logout request can be built later. Nil for non-OIDC logins.
+type SessionOIDCData struct {
+	IDToken     string
+	ProviderKey string
+}
+
 // CreateSession creates a new session record and generates a refresh token.
 // Returns the session with RefreshToken populated (cleartext, shown only once).
-func CreateSession(s *xorm.Session, userID int64, deviceInfo, ipAddress string, isLongSession bool) (*Session, error) {
+// Pass oidc for OpenID Connect logins to persist the logout data; nil otherwise.
+func CreateSession(s *xorm.Session, userID int64, deviceInfo, ipAddress string, isLongSession bool, oidc *SessionOIDCData) (*Session, error) {
 	rawToken, hash, err := generateHashedToken()
 	if err != nil {
 		return nil, err
@@ -97,6 +109,10 @@ func CreateSession(s *xorm.Session, userID int64, deviceInfo, ipAddress string, 
 		IPAddress:     ipAddress,
 		IsLongSession: isLongSession,
 		LastActive:    time.Now(),
+	}
+	if oidc != nil {
+		session.OIDCIDToken = oidc.IDToken
+		session.OIDCProviderKey = oidc.ProviderKey
 	}
 
 	_, err = s.Insert(session)
@@ -148,7 +164,7 @@ func (sess *Session) ReadAll(s *xorm.Session, a web.Auth, _ string, page int, pe
 
 	err = s.
 		Where(where).
-		OrderBy("last_active DESC").
+		OrderBy("last_active DESC, id DESC").
 		Limit(getLimitFromPageIndex(page, perPage)).
 		Find(&sessions)
 	if err != nil {
@@ -161,8 +177,23 @@ func (sess *Session) ReadAll(s *xorm.Session, a web.Auth, _ string, page int, pe
 
 // Delete deletes a session by ID, scoped to the owning user.
 func (sess *Session) Delete(s *xorm.Session, a web.Auth) error {
-	_, err := s.Where("id = ? AND user_id = ?", sess.ID, a.GetID()).Delete(&Session{})
-	return err
+	deleted, err := s.Where("id = ? AND user_id = ?", sess.ID, a.GetID()).Delete(&Session{})
+	if err != nil || deleted == 0 {
+		return err
+	}
+	return revokeSessions(s, &SessionsRevokedEvent{UserID: a.GetID(), SessionID: sess.ID})
+}
+
+// Sockets close only once the caller dispatches s's pending events.
+func DeleteSessionByID(s *xorm.Session, id string) (*Session, error) {
+	session, err := GetSessionByID(s, id)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.Where("id = ?", id).Delete(&Session{}); err != nil {
+		return nil, err
+	}
+	return session, revokeSessions(s, &SessionsRevokedEvent{UserID: session.UserID, SessionID: id})
 }
 
 // UpdateSessionLastActive updates the last_active timestamp of a session.
@@ -199,7 +230,18 @@ func RotateRefreshToken(s *xorm.Session, session *Session) (newRawToken string, 
 // DeleteAllUserSessions removes all sessions for a user (e.g., on password change).
 func DeleteAllUserSessions(s *xorm.Session, userID int64) error {
 	_, err := s.Where("user_id = ?", userID).Delete(&Session{})
-	return err
+	if err != nil {
+		return err
+	}
+	return revokeSessions(s, &SessionsRevokedEvent{UserID: userID})
+}
+
+func revokeSessions(s *xorm.Session, event *SessionsRevokedEvent) error {
+	if err := user.InvalidateSessionAuthCacheOnCommit(s, event.UserID); err != nil {
+		return err
+	}
+	events.DispatchOnCommit(s, event)
+	return nil
 }
 
 // RegisterSessionCleanupCron registers a cron to delete sessions whose refresh

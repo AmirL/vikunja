@@ -1,27 +1,42 @@
 <template>
 	<Teleport to="body">
-		<!-- FIXME: transition should not be included in the modal -->
-		<CustomTransition
-			:name="transitionName"
-			appear
+		<dialog
+			v-if="showDialog"
+			ref="dialogRef"
+			class="modal-dialog"
+			:class="[
+				{ 'has-overflow': overflow },
+				isSheet ? 'bottom-sheet' : variant,
+			]"
+			:aria-labelledby="headerLabelId"
+			:aria-label="sheetLabel"
+			v-bind="attrs"
+			@cancel.prevent="$emit('close')"
 		>
-			<section
-				v-if="enabled"
-				ref="modal"
-				class="modal-mask"
-				:class="[
-					{ 'has-overflow': overflow },
-					variant,
-				]"
-				v-bind="attrs"
+			<div
+				class="modal-container"
+				@mousedown.self.prevent.stop="$emit('close')"
 			>
 				<div
-					v-shortcut="'Escape'"
-					class="modal-container"
-					@mousedown.self.prevent.stop="$emit('close')"
+					v-if="isSheet"
+					class="bottom-sheet__panel"
 				>
+					<div class="bottom-sheet__handle" />
+					<div
+						v-if="title || $slots['header-action']"
+						class="bottom-sheet__header"
+					>
+						<span class="bottom-sheet__title">{{ title }}</span>
+						<slot name="header-action" />
+					</div>
+					<div class="bottom-sheet__body">
+						<slot />
+					</div>
+				</div>
+				<template v-else>
 					<BaseButton
-						class="close"
+						:aria-label="$t('misc.closeDialog')"
+						class="close d-print-none"
 						@click="$emit('close')"
 					>
 						<Icon icon="times" />
@@ -34,7 +49,10 @@
 						}"
 					>
 						<slot>
-							<div class="modal-header">
+							<div
+								:id="headerId"
+								class="modal-header"
+							>
 								<slot name="header" />
 							</div>
 							<div class="content">
@@ -59,70 +77,198 @@
 							</div>
 						</slot>
 					</div>
-				</div>
-			</section>
-		</CustomTransition>
+				</template>
+			</div>
+		</dialog>
 	</Teleport>
 </template>
 
+<script lang="ts">
+// Nested modals share one body scroll lock, so closing the inner one must not unlock the page.
+let openModalCount = 0
+</script>
+
 <script lang="ts" setup>
-import CustomTransition from '@/components/misc/CustomTransition.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
-import {ref, useAttrs, watchEffect, onBeforeUnmount, watch} from 'vue'
-import {useScrollLock} from '@vueuse/core'
+import {computed, ref, useAttrs, useId, useSlots, watch, onBeforeUnmount, onMounted} from 'vue'
 
 const props = withDefaults(defineProps<{
 	enabled?: boolean,
 	overflow?: boolean,
 	wide?: boolean,
-	transitionName?: 'modal' | 'fade',
-	variant?: 'default' | 'hint-modal' | 'scrolling',
+	variant?: 'default' | 'hint-modal' | 'scrolling' | 'top' | 'fullscreen' | 'sheet',
+	title?: string,
 }>(), {
 	enabled: true,
 	overflow: false,
 	wide: false,
-	transitionName: 'modal',
 	variant: 'default',
+	title: '',
 })
 
-const emit = defineEmits(['close', 'submit'])
+defineEmits(['close', 'submit'])
 
 defineOptions({
 	inheritAttrs: false,
 })
 
+const TRANSITION_DURATION = 150
+
 const attrs = useAttrs()
+const slots = useSlots()
+const headerId = useId()
+// Name the dialog from its header when the fallback layout renders one and the
+// caller didn't pass an explicit aria-label through the attrs.
+const headerLabelId = computed(() =>
+	!attrs['aria-label'] && !slots.default && slots.header ? headerId : undefined,
+)
+const isSheet = computed(() => props.variant === 'sheet')
+const sheetLabel = computed(() => (isSheet.value && props.title) || undefined)
+const dialogRef = ref<HTMLDialogElement | null>(null)
+const previouslyFocused = ref<Element | null>(null)
+const showDialog = ref(false)
+let closeTimer: ReturnType<typeof setTimeout> | null = null
+let holdsScrollLock = false
 
-const modal = ref<HTMLElement | null>(null)
-const scrollLock = useScrollLock(modal)
+function lockBodyScroll() {
+	if (holdsScrollLock) return
+	holdsScrollLock = true
+	openModalCount++
+	document.body.style.overflow = 'hidden'
+}
 
-watchEffect(() => {
-	scrollLock.value = props.enabled
-})
-
-function onKeydown(e: KeyboardEvent) {
-	if (e.code === 'Escape') {
-		if (e.isComposing) {
-			return
-		}
- 		emit('close')
+function releaseBodyScroll() {
+	if (!holdsScrollLock) return
+	holdsScrollLock = false
+	openModalCount--
+	if (openModalCount === 0) {
+		document.body.style.overflow = ''
 	}
+}
+
+function openDialog() {
+	if (closeTimer) {
+		clearTimeout(closeTimer)
+		closeTimer = null
+	}
+	previouslyFocused.value = document.activeElement
+	showDialog.value = true
+	lockBodyScroll()
+	// If we're re-opening while the previous close transition is still in
+	// flight the <dialog> is still mounted and [open], so the dialogRef
+	// watcher below won't re-fire. Clear the data-closing flag here so the
+	// dialog doesn't stay stuck at opacity 0.
+	if (dialogRef.value) {
+		delete dialogRef.value.dataset.closing
+	}
+	// The initial `showModal()` call happens in the `watch(dialogRef, …)`
+	// below, which fires the moment Vue mounts the <dialog>. We cannot call
+	// it synchronously here because the element is not in the DOM yet
+	// (v-if="showDialog" only just became true), and we cannot rely on a
+	// single nextTick because the mount can be deferred past it (#2590).
+}
+
+function closeDialog() {
+	releaseBodyScroll()
+
+	const dialog = dialogRef.value
+	if (!dialog) return
+
+	// Trigger the fade-out while the dialog is still [open] so the opacity
+	// transition plays in browsers that don't support allow-discrete (Firefox).
+	dialog.dataset.closing = ''
+
+	closeTimer = setTimeout(() => {
+		delete dialog.dataset.closing
+		dialog.close()
+		showDialog.value = false
+		closeTimer = null
+		if (previouslyFocused.value instanceof HTMLElement) {
+			previouslyFocused.value.focus()
+		}
+		previouslyFocused.value = null
+	}, TRANSITION_DURATION)
 }
 
 watch(
 	() => props.enabled,
-	(value: boolean) => {
- 		if (value) {
-			window.addEventListener('keydown', onKeydown)
+	(isEnabled) => {
+		if (isEnabled) {
+			openDialog()
 		} else {
-			window.removeEventListener('keydown', onKeydown)
+			closeDialog()
 		}
 	},
 	{immediate: true},
 )
 
+// Actually call showModal() the moment the <dialog> element is mounted.
+// `dialogRef` is populated by Vue during the render flush after
+// `showDialog.value = true`, so this fires deterministically, no matter
+// how many flushes the renderer needs (see #2590). We re-check
+// `props.enabled` here because the prop can flip back to `false` between
+// `openDialog()` and the mount flush, in which case we must not open.
+watch(dialogRef, (dialog) => {
+	if (!dialog) return
+	if (!props.enabled) return
+	delete dialog.dataset.closing
+	dialog.showModal()
+})
+
+// A <dialog> opened with showModal() lives in the browser's top layer, which
+// renders only the first page during print (top-layer elements are
+// viewport-anchored and don't paginate). Temporarily swap to a non-modal
+// dialog for the duration of the print so the content flows in normal
+// document order and can break across pages.
+let wasModalBeforePrint = false
+
+function handleBeforePrint() {
+	const dialog = dialogRef.value
+	if (dialog && dialog.matches(':modal')) {
+		wasModalBeforePrint = true
+		dialog.close()
+		dialog.show()
+	}
+}
+
+function handleAfterPrint() {
+	if (!wasModalBeforePrint) return
+	wasModalBeforePrint = false
+	const dialog = dialogRef.value
+	if (dialog && dialog.open) {
+		dialog.close()
+		dialog.showModal()
+	}
+}
+
+onMounted(() => {
+	window.addEventListener('beforeprint', handleBeforePrint)
+	window.addEventListener('afterprint', handleAfterPrint)
+})
+
+// Callers which render the modal behind a v-if (e.g. Popup's sheet) unmount it
+// without ever running closeDialog(), so focus restoration has to happen here too.
 onBeforeUnmount(() => {
-	window.removeEventListener('keydown', onKeydown)
+	if (closeTimer) {
+		clearTimeout(closeTimer)
+		closeTimer = null
+	}
+	releaseBodyScroll()
+
+	const dialog = dialogRef.value
+	// Leave the top layer first: while the dialog is [open] everything outside
+	// it is inert and focus() silently does nothing.
+	dialog?.close()
+	const toFocus = previouslyFocused.value
+	const active = document.activeElement
+	const focusIsLost = !active || active === document.body || Boolean(dialog?.contains(active))
+	if (focusIsLost && toFocus instanceof HTMLElement && toFocus.isConnected) {
+		toFocus.focus()
+	}
+	previouslyFocused.value = null
+
+	window.removeEventListener('beforeprint', handleBeforePrint)
+	window.removeEventListener('afterprint', handleAfterPrint)
 })
 </script>
 
@@ -130,20 +276,52 @@ onBeforeUnmount(() => {
 $modal-margin: 4rem;
 $modal-width: 1024px;
 
-.modal-mask {
+.modal-dialog {
+	// Reset UA dialog styles
+	padding: 0;
+	border: none;
+	// The scrim lives on the dialog element, not on ::backdrop: Chromium
+	// intermittently stops painting a styled ::backdrop (e.g. after the
+	// dialog's subtree re-renders, or while display is transitioned) even
+	// though getComputedStyle still reports the color. The dialog fills the
+	// viewport anyway, and its opacity transition fades the scrim with it —
+	// same as the old div-based .modal-mask.
+	background: rgba(0, 0, 0, .8);
+	color: #ffffff;
+	// Fill viewport
 	position: fixed;
-	z-index: 4000;
-	inset-block-start: 0;
-	inset-inline-start: 0;
+	inset: 0;
 	inline-size: 100%;
 	block-size: 100%;
-	background-color: rgba(0, 0, 0, .8);
+	max-inline-size: 100%;
+	max-block-size: 100%;
+
+	// Transitions. No display/allow-discrete transition needed: the close
+	// fade runs while the dialog is still [open] (data-closing + timer in
+	// closeDialog), and transitioning display triggers the Chromium paint
+	// bug above.
+	opacity: 0;
 	transition: opacity 150ms ease;
-	color: #ffffff;
+
+	&[open]:not([data-closing]) {
+		opacity: 1;
+
+		@starting-style {
+			opacity: 0;
+		}
+	}
+
+	&::backdrop {
+		background-color: rgba(0, 0, 0, 0);
+	}
+
+	// in quick-add mode the Electron window itself is the overlay — no scrim
+	&:has(.is-quick-add-mode) {
+		background: transparent;
+	}
 }
 
 .modal-container {
-	transition: all 150ms ease;
 	position: relative;
 	inline-size: 100%;
 	block-size: 100%;
@@ -151,17 +329,25 @@ $modal-width: 1024px;
 	overflow: auto;
 	padding-block-start: env(safe-area-inset-top);
 	padding-block-end: env(safe-area-inset-bottom);
+
 }
 
 .default .modal-content,
-.hint-modal .modal-content {
+.hint-modal .modal-content,
+.top .modal-content {
 	text-align: center;
 	position: absolute;
 	// fine to use top/left since we're only using this to position it centered
 	inset-block-start: 50%;
 	inset-inline-start: 50%;
 	transform: translate(-50%, -50%);
-	
+	// Cap centered content to the viewport and scroll inside it. Without this a
+	// taller-than-viewport modal centres its top edge above the viewport, where
+	// the container's overflow can't scroll to it (the .top variant overrides
+	// both values below).
+	max-block-size: calc(100dvh - 2rem);
+	overflow: auto;
+
 	[dir="rtl"] & {
 		transform: translate(50%, -50%);
 	}
@@ -170,6 +356,9 @@ $modal-width: 1024px;
 		margin: 0;
 		position: static;
 		transform: none;
+		// the fullscreen mobile layout flows and scrolls in .modal-container
+		max-block-size: none;
+		overflow: visible;
 	}
 
 	.modal-header {
@@ -182,6 +371,40 @@ $modal-width: 1024px;
 	}
 }
 
+// anchored below the top edge instead of centered, used for QuickActions
+.top .modal-content {
+	inset-block-start: 3rem;
+	transform: translate(-50%, 0);
+	max-block-size: calc(100dvh - 6rem);
+	overflow: auto;
+
+	[dir="rtl"] & {
+		transform: translate(50%, 0);
+	}
+
+	// the fullscreen mobile layout flows and scrolls in .modal-container
+	@media screen and (max-width: $tablet) {
+		transform: none;
+		max-block-size: none;
+		overflow: visible;
+	}
+}
+
+// Default width for centered modals. Scoped with :not(.is-wide) so the
+// `wide` prop can still expand the modal (the .is-wide rule below would
+// otherwise be outranked by .default .modal-content's specificity).
+.default .modal-content:not(.is-wide),
+.hint-modal .modal-content:not(.is-wide),
+.top .modal-content:not(.is-wide) {
+	inline-size: calc(100% - 2rem);
+	max-inline-size: 640px;
+
+	@media screen and (max-width: $tablet) {
+		inline-size: 100%;
+		max-inline-size: none;
+	}
+}
+
 // scrolling-content
 // used e.g. for <TaskDetailViewModal>
 .scrolling .modal-content {
@@ -190,7 +413,7 @@ $modal-width: 1024px;
 
 	max-block-size: none; // reset bulma
 	overflow: visible; // reset bulma
-	
+
 	@media not print {
 		max-inline-size: $modal-width;
 	}
@@ -211,15 +434,94 @@ $modal-width: 1024px;
 	inline-size: calc(100% - 2rem);
 }
 
-.hint-modal {
-	z-index: 4600;
+// no centering transform: it would trap fixed descendants in a small containing block
+.fullscreen .modal-content {
+	position: static;
+	inline-size: 100%;
+	block-size: 100%;
+	max-inline-size: none;
+	max-block-size: none;
+	transform: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
 
+// .modal-content would otherwise paint over the fixed .close
+.fullscreen .close {
+	z-index: 1;
+}
+
+.hint-modal {
 	:deep(.card-content) {
 		text-align: start;
 
 		.info {
 			font-style: italic;
 		}
+	}
+}
+
+// No scrim element: the dialog itself paints it, so the container's mousedown-outside is the scrim tap.
+.bottom-sheet {
+	background: hsla(0, 0%, 4%, .4);
+
+	.modal-container {
+		display: flex;
+		flex-direction: column;
+		justify-content: flex-end;
+		// html owns the page scroll, so body overflow alone does not lock it — contain the chain instead.
+		overflow: hidden;
+		overscroll-behavior: contain;
+		padding: 0;
+	}
+}
+
+.bottom-sheet__panel {
+	display: flex;
+	flex-direction: column;
+	inline-size: 100%;
+	overflow-x: hidden;
+	max-block-size: 92dvh;
+	background: var(--white);
+	color: var(--text);
+	border-radius: 18px 18px 0 0;
+	box-shadow: 0 -8px 30px hsla(var(--grey-500-hsl), .18);
+	padding-block-end: env(safe-area-inset-bottom);
+}
+
+.bottom-sheet__handle {
+	inline-size: 2.5rem;
+	block-size: 5px;
+	margin: .5rem auto 0;
+	border-radius: $radius-rounded;
+	background: var(--grey-200);
+	flex-shrink: 0;
+}
+
+.bottom-sheet__header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: .5rem 1rem .75rem;
+	flex-shrink: 0;
+}
+
+.bottom-sheet__title {
+	font-family: $vikunja-font;
+	font-weight: 700;
+	font-size: 1.15rem;
+	color: var(--grey-900);
+}
+
+.bottom-sheet__body {
+	min-block-size: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+
+	// The mobile :deep(.card) rule below stretches every card to viewport height; a card inside the sheet must not be.
+	:deep(.card) {
+		min-block-size: 0 !important;
 	}
 }
 
@@ -236,6 +538,13 @@ $modal-width: 1024px;
 		inset-inline-end: 50%;
 		// we align the close button to the modal until there is enough space outside for it
 		transform: translateX(calc((#{$modal-width} / 2) - #{$close-button-padding}));
+
+		// fullscreen has no card to hug — keep the corner position instead
+		.fullscreen & {
+			inset-block-start: .5rem;
+			inset-inline-end: $close-button-padding;
+			transform: none;
+		}
 	}
 
 	@media screen and (min-width: $tablet) and (max-width: #{$desktop + $close-button-min-space}) {
@@ -244,7 +553,7 @@ $modal-width: 1024px;
 }
 
 @media print, screen and (max-width: $tablet) {
-	.modal-mask {
+	.modal-dialog {
 		overflow: visible !important;
 	}
 
@@ -255,6 +564,11 @@ $modal-width: 1024px;
 		padding-block-end: env(safe-area-inset-bottom);
 	}
 
+	// no card to center against, so the container needs full height
+	.fullscreen .modal-container {
+		block-size: 100dvh;
+	}
+
 	.modal-content {
 		position: static;
 		max-block-size: none;
@@ -262,6 +576,11 @@ $modal-width: 1024px;
 
 	.close {
 		display: none;
+	}
+
+	// no card-header close icon to fall back on
+	.fullscreen .close {
+		display: block;
 	}
 
 	:deep(.card) {
@@ -275,6 +594,32 @@ $modal-width: 1024px;
 	}
 }
 
+// Unconstrain the native <dialog> so the full modal content flows onto the
+// printed page instead of being clipped to the viewport-sized top layer.
+@media print {
+	.modal-dialog {
+		position: static;
+		inline-size: auto;
+		block-size: auto;
+		max-inline-size: none;
+		max-block-size: none;
+		background: transparent;
+
+		&::backdrop {
+			display: none;
+		}
+	}
+
+	.modal-container {
+		overflow: visible;
+		min-block-size: 0;
+	}
+
+	:deep(.card) {
+		min-block-size: 0 !important;
+	}
+}
+
 .modal-content:has(.modal-header) {
 	display: flex;
 	flex-direction: column;
@@ -285,7 +630,7 @@ $modal-width: 1024px;
 
 .modal-content :deep(.card .card-header-icon.close) {
 	display: none;
-	
+
 	@media screen and (max-width: $tablet) {
 		display: block;
 	}
@@ -294,12 +639,12 @@ $modal-width: 1024px;
 
 <style lang="scss">
 // Close icon SVG uses currentColor, change the color to keep it visible
-.dark .close {
+.dark .modal-dialog .close {
 	color: var(--grey-900);
 }
 
 @media print, screen and (max-width: $tablet) {
-  body:has(.modal-mask) #app {
+  body:has(dialog[open].modal-dialog:not(.bottom-sheet)) #app {
 	display: none;
   }
 }

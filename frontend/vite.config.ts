@@ -4,6 +4,7 @@ import {configDefaults} from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 import {URL, fileURLToPath} from 'node:url'
 import {dirname, resolve} from 'node:path'
+import {readFileSync} from 'node:fs'
 
 import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
 import {VitePWA} from 'vite-plugin-pwa'
@@ -26,7 +27,7 @@ const PREFIXED_SCSS_STYLES = `@use "sass:math";
 /*
 ** Configure sentry plugin
 */
-function getSentryConfig(env: ImportMetaEnv): SentryVitePluginOptions {
+function getSentryConfig(env: Record<string, string>): SentryVitePluginOptions {
 	return {
 		// keep these flags for easier debugging
 		disable: true,
@@ -103,11 +104,18 @@ export default defineConfig(({command, mode}) => {
 })
 
 function getBuildConfig(env: Record<string, string>) {
+	const workboxPkgPath = resolve(dirname(pathSrc), 'node_modules/workbox-precaching/package.json')
+	const workboxVersion = JSON.parse(readFileSync(workboxPkgPath, 'utf-8')).version
+
 	return {
 		base: env.VIKUNJA_FRONTEND_BASE,
+		define: {
+			__WORKBOX_VERSION__: JSON.stringify(`v${workboxVersion}`),
+		},
 		// https://vitest.dev/config/
 		test: {
 			environment: 'happy-dom',
+			setupFiles: ['./src/test-setup.ts'],
 			exclude: [...configDefaults.exclude, 'e2e/**'],
 			'vitest.commandLine': 'pnpm test:unit',
 		},
@@ -187,6 +195,15 @@ function getBuildConfig(env: Record<string, string>) {
 					start_url: '.',
 					display: 'standalone',
 					background_color: '#000000',
+					share_target: {
+						action: './',
+						method: 'GET',
+						params: {
+							title: 'title',
+							text: 'description',
+							url: 'url',
+						},
+					},
 					shortcuts: [
 						{
 							name: 'Overview',
@@ -242,7 +259,6 @@ function getBuildConfig(env: Record<string, string>) {
 			},
 		},
 		build: {
-			target: 'esnext',
 			// required for sentry debugging: tells vite to create source maps
 			sourcemap: Boolean(env.SENTRY_AUTH_TOKEN),
 			rollupOptions: {
@@ -262,16 +278,25 @@ function getBuildConfig(env: Record<string, string>) {
 function getServeConfig(env: Record<string, string>) {
 	// get some default settings from prod mod
 	const buildConfig = getBuildConfig(env)
+
+	// Build the proxy pattern from VIKUNJA_FRONTEND_BASE so that custom base
+	// paths like /vikunja proxy /vikunja/api/* correctly.
+	// Falls back to /api.
+	const base = (env.VIKUNJA_FRONTEND_BASE || '/').replace(/\/+$/, '')
+	const proxyPath = `${base}/api`
+
 	// override prod settings with dev settings
 	return {
 		...buildConfig,
 		server: {
 			...buildConfig.server,
 			...(env.DEV_PROXY && { proxy: {
-				'/api': {
+				[proxyPath]: {
 					target: env.DEV_PROXY,
 					changeOrigin: true,
 					secure: false,
+					// Strips prefix for the backend
+					rewrite: (path: string) => path.replace(new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), ''),
 				},
 			}}),
 		},

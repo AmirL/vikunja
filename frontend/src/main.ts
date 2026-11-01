@@ -1,9 +1,14 @@
+import './client/inviteLink'
 import {createApp} from 'vue'
+import {VueQueryPlugin} from '@tanstack/vue-query'
 
 import pinia from './pinia'
 import router from './router'
 import App from './App.vue'
 import {error, success} from './message'
+import {configureApiClient} from './client/http'
+import {normalizeApiUrl} from './helpers/apiUrl'
+import {queryClient} from './client/queryClient'
 
 // Notifications
 import Notifications from '@kyvg/vue3-notification'
@@ -19,26 +24,21 @@ declare global {
 		API_URL: string;
 		SENTRY_ENABLED?: boolean;
 		SENTRY_DSN?: string;
-		ALLOW_ICON_CHANGES: boolean;
 		CUSTOM_LOGO_URL?: string;
 		CUSTOM_LOGO_URL_DARK?: string;
 	}
 }
 
-// Check if we have an api url in local storage and use it if that's the case
 const apiUrlFromStorage = localStorage.getItem('API_URL')
-if (apiUrlFromStorage !== null) {
-	window.API_URL = apiUrlFromStorage
+window.API_URL = normalizeApiUrl(apiUrlFromStorage ?? window.API_URL)
+if (apiUrlFromStorage !== null && apiUrlFromStorage !== window.API_URL) {
+	localStorage.setItem('API_URL', window.API_URL)
 }
-
-// Make sure the api url does not contain a / at the end
-if (window.API_URL.endsWith('/')) {
-	window.API_URL = window.API_URL.slice(0, -1)
-}
+configureApiClient()
 
 // directives
 import focus from '@/directives/focus'
-import {vTooltip} from 'floating-vue'
+import tooltip from '@/directives/tooltip'
 import 'floating-vue/dist/style.css'
 import shortcut from '@/directives/shortcut'
 import testid from '@/directives/testid'
@@ -48,6 +48,12 @@ import FontAwesomeIcon from '@/components/misc/Icon'
 import Button from '@/components/input/Button.vue'
 import Modal from '@/components/misc/Modal.vue'
 import Card from '@/components/misc/Card.vue'
+
+import {setupKeyboardModality} from '@/helpers/keyboardModality'
+import {handleChunkLoadErrors} from '@/helpers/handleChunkLoadErrors'
+
+setupKeyboardModality()
+handleChunkLoadErrors()
 
 // We're loading the language before creating the app so that it won't fail to load when the user's 
 // language file is not yet loaded.
@@ -64,14 +70,15 @@ setLanguage(browserLanguage).then(() => {
 	}
 
 	app.use(Notifications)
+	app.use(VueQueryPlugin, {queryClient})
 
 	app.directive('focus', focus)
-	app.directive('tooltip', vTooltip)
+	app.directive('tooltip', tooltip)
 	app.directive('shortcut', shortcut)
 	app.directive('cy', testid)
 
 	app.component('Icon', FontAwesomeIcon)
-	app.component('XButton', Button)
+	app.component('XButton', Button as import('vue').Component)
 	app.component('Modal', Modal)
 	app.component('Card', Card)
 
