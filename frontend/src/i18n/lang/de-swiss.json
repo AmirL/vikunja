@@ -121,6 +121,7 @@
 				"enable": "Aktivieren",
 				"tokensInactive": "API-Token eines deaktivierten Bots werden abgelehnt. Aktiviere den Bot, um Token zu erstellen oder zu verwenden.",
 				"badge": "Bot",
+				"badgeOwner": "Bot, erstellt von {user}",
 				"delete": {
 					"header": "Diesen Bot-Account löschen",
 					"text1": "Bist Du sicher, dass Du den Bot-Account \"{username}\" löschen möchtest?",
@@ -452,12 +453,15 @@
 		"delete": {
 			"title": "„{project}“ löschen",
 			"header": "Dieses Projekt löschen",
-			"text1": "Bist du sicher, dass du dieses Projekt und alle seine Inhalte löschen willst?",
-			"text2": "Dies umfasst alle Aufgaben und kann NICHT rückgängig gemacht werden!",
-			"success": "Das Projekt wurde erfolgreich gelöscht.",
-			"tasksToDelete": "Dies löscht unwiderruflich ca. {count} Aufgaben.",
-			"tasksAndChildProjectsToDelete": "Dies löscht unwiderruflich ca. {tasks} Aufgaben und {projects} Projekte.",
-			"noTasksToDelete": "Dieses Projekt enthält keine Aufgaben, es kann sicher gelöscht werden."
+			"success": "Das Projekt wurde in den Papierkorb verschoben.",
+			"toTrash": "Verschiebt dieses Projekt und {tasks} in den Papierkorb. Sie werden nach {days} Tagen endgültig gelöscht.",
+			"toTrashFallback": "Verschiebt dieses Projekt mit allem, was darin ist, in den Papierkorb. Es wird nach {days} Tagen endgültig gelöscht.",
+			"toTrashWithSubProjects": "Verschiebt dieses Projekt, {subProjects} und {tasks} in den Papierkorb. Sie werden nach {days} Tagen endgültig gelöscht.",
+			"subProjects": "{count} Unterprojekt | {count} Unterprojekte",
+			"tasks": "keine Aufgaben | {count} Aufgabe | {count} Aufgaben",
+			"timeEntries": "Erfasste Zeiten ({entries} von {people}) bleiben erhalten, werden aber nach {days} Tagen vom Projekt gelöst.",
+			"timeEntryCount": "{count} Zeiteintrag | {count} Zeiteinträge",
+			"people": "{count} Person | {count} Personen"
 		},
 		"duplicate": {
 			"title": "Dupliziere dieses Projekt",
@@ -608,7 +612,8 @@
 			"bucketTitleSavedSuccess": "Der Spaltenname wurde erfolgreich gespeichert.",
 			"bucketLimitSavedSuccess": "Das Spaltenlimit wurde erfolgreich gespeichert.",
 			"collapse": "Spalte einklappen",
-			"bucketLimitReached": "Du hast das Limit dieses Buckets erreicht. Entferne Aufgaben oder erhöhe das Limit, um neue Aufgaben hinzuzufügen.",
+			"bucketLimitReached": "Du hast das Limit dieser Spalte erreicht. Entferne Aufgaben oder erhöhe das Limit, um neue Aufgaben hinzuzufügen.",
+			"bucketLimitReachedShort": "Limit erreicht",
 			"bucketOptions": "Bucketoptionen"
 		},
 		"pseudo": {
@@ -1126,7 +1131,7 @@
 			"doneAt": "{0} erledigt",
 			"titleRequired": "Der Aufgabentitel darf nicht leer sein.",
 			"updateSuccess": "Die Uufgab isch erfolgriich g'speichered wore.",
-			"deleteSuccess": "Die Uufgab isch erfolgriich g'chüblet wore.",
+			"deleteSuccess": "Die Aufgabe wurde in den Papierkorb verschoben.",
 			"duplicateSuccess": "Die Aufgabe wurde erfolgreich dupliziert.",
 			"noBucket": "Keine Spalte",
 			"bucketSelectLabel": "Kanban bucket: {bucket}",
@@ -1134,6 +1139,7 @@
 			"belongsToProject": "Diese Aufgabe gehört zum Projekt „{project}“",
 			"back": "Zurück zum Projekt",
 			"due": "Fällig bis {at}",
+			"overdue": "Überfällig",
 			"closeTaskDetail": "Aufgabendetails schließen",
 			"title": "Aufgabendetails",
 			"markAsDone": "'{task}' als erledigt markieren",
@@ -1141,11 +1147,6 @@
 			"organization": "Organisation",
 			"management": "Verwaltung",
 			"dateAndTime": "Datum und Uhrzeit",
-			"delete": {
-				"header": "Die Uufgab chüble",
-				"text1": "Bisch du dir sicher, dass du die Uufgab chüblä wetsch?",
-				"text2": "Das wird au alli Ahhäng, Errinnerige und Beziehige wo mit dere Uufgab verchnüpft sind chüble und cha nid rückgängig gmacht werde!"
-			},
 			"actions": {
 				"assign": "Benutzer:in zuweisen",
 				"label": "Label hinzufügen",
@@ -1603,6 +1604,9 @@
 		"3008": "Dieses Projekt ist archiviert und kann deshalb nur gelesen werden. Dies gilt auch für alle Aufgaben, die mit diesem Projekt verbunden sind.",
 		"3016": "Das übergeordnete Projekt ist archiviert. Un-Archiviere es erst.",
 		"3017": "Das Standardprojekt muss ein Projekt sein, in das du schreiben kannst.",
+		"3018": "Dieses Projekt ist im Papierkorb. Stelle es zuerst wieder her.",
+		"3019": "Das übergeordnete Projekt ist im Papierkorb. Stelle es zuerst wieder her.",
+		"3020": "Diese Projekthierarchie ist zu groß, um unter das gewählte übergeordnete Projekt verschoben zu werden.",
 		"4001": "Der Titel darf nicht leer sein.",
 		"4002": "Diese Aufgabe existiert nicht.",
 		"4003": "Alle Massenbearbeitungen an Aufgaben müssen zum selben Projekt gehören.",
@@ -1628,6 +1632,8 @@
 		"4023": "Kann keinen Aufgabenbeziehungszyklus erstellen.",
 		"4034": "Die Datei existiert nicht.",
 		"4035": "Die hochgeladene Datei überschreitet die maximal konfigurierte Dateigröße.",
+		"4040": "Diese Aufgabe ist im Papierkorb.",
+		"4041": "Diese Aufgabenhierarchie ist zu groß, um weitere Unteraufgaben oder übergeordnete Aufgaben hinzuzufügen.",
 		"6001": "Der Teamname kann nicht leer sein.",
 		"6002": "Da Team giz nid.",
 		"6004": "Das Team hat bereits Zugriff auf dieses Projekt.",
@@ -1667,6 +1673,7 @@
 		"14016": "Die Importkonfiguration konnte nicht geparst werden. Bitte stellen Sie sicher, dass es sich um ein gültiges JSON-Objekt handelt.",
 		"14018": "Der Import enthält mehr Elemente als erlaubt sind.",
 		"14019": "Der Migrationsstatus ist ungültig oder abgelaufen. Bitte starte die Migration erneut.",
+		"14020": "Ein Projekt im Import hat mehr Ansichten als erlaubt.",
 		"14201": "Planka hat die angegebenen Anmeldedaten abgelehnt. Überprüfe die URL und den API-Schlüssel oder den Benutzernamen und das Passwort.",
 		"14202": "Das Planka-Konto erfordert einen zusätzlichen Anmeldeschritt (Zwei-Faktor-Code oder das Akzeptieren der Nutzungsbedingungen). Melde dich einmal im Browser bei Planka an oder verwende stattdessen einen API-Schlüssel anstelle von Benutzername und Passwort.",
 		"14203": "Eine Planka-URL und entweder ein API-Schlüssel oder Benutzername und Passwort sind erforderlich.",
@@ -1686,8 +1693,10 @@
 	"timeTracking": {
 		"title": "Zeiterfassung",
 		"stop": "Timer stoppen",
+		"running": "Timer läuft",
 		"logTime": "Zeit buchen",
 		"editEntry": "Eintrag bearbeiten",
+		"commentLabel": "Kommentar",
 		"form": {
 			"task": "Aufgabe",
 			"taskSearch": "Nach einer Aufgabe suchen…",
@@ -1696,7 +1705,8 @@
 			"startTimer": "Timer starten",
 			"update": "Eintrag aktualisieren",
 			"smartFill": "Vom letzten Eintrag ausfüllen",
-			"endsSpanningEntriesAt": "Wenn du diesen Timer startest, beendet den überlappenden Timer um {time}."
+			"endsSpanningEntriesAt": "Wenn du diesen Timer startest, beendet den überlappenden Timer um {time}.",
+			"privateHint": "Ohne Projekt oder Aufgabe kannst nur du diesen Eintrag sehen."
 		},
 		"list": {
 			"emptyTask": "Noch keine Zeit für diese Aufgabe getrackt.",
@@ -1709,7 +1719,8 @@
 		"browse": {
 			"selectRange": "Bereich wählen",
 			"userSearch": "Nach einer:m Benutzer:in suchen…"
-		}
+		},
+		"noProject": "Kein Projekt"
 	},
 	"time": {
 		"justNow": "gerade eben",
@@ -1813,5 +1824,55 @@
 			"futureExpiry": "Wähle ein Ablaufdatum, das in der Zukunft liegt.",
 			"creatorDeleted": "Gelöschter Account"
 		}
+	},
+	"trash": {
+		"restoreSuccess": "Die Aufgabe wurde wiederhergestellt.",
+		"deleteForeverSuccess": "Die Aufgabe wurde endgültig gelöscht.",
+		"emptySuccess": "Der Papierkorb wurde geleert.",
+		"title": "Papierkorb",
+		"restore": "Wiederherstellen",
+		"deleteForever": "Endgültig löschen",
+		"empty": "Papierkorb leeren",
+		"noTasks": "Im Papierkorb sind keine Aufgaben.",
+		"deletedBy": "Von {user} {since} gelöscht",
+		"deleted": "{since} gelöscht",
+		"daysLeft": "Wird heute endgültig gelöscht | Wird in {count} Tag endgültig gelöscht | Wird in {count} Tagen endgültig gelöscht",
+		"deleteForeverModal": {
+			"header": "Diese Aufgabe endgültig löschen",
+			"text": "Damit wird „{task}“ mit allen Kommentaren, Anhängen, Erinnerungen und Verknüpfungen endgültig gelöscht. Die Zeiteinträge bleiben beim Projekt. Dies kann nicht rückgängig gemacht werden."
+		},
+		"emptyModal": {
+			"text": "Es gibt keine Aufgaben, die du löschen kannst. | Damit wird 1 Aufgabe endgültig gelöscht. Dies kann nicht rückgängig gemacht werden. | Damit werden {count} Aufgaben endgültig gelöscht. Dies kann nicht rückgängig gemacht werden.",
+			"byOthers": "Eine davon wurde von jemand anderem in den Papierkorb verschoben. | {count} davon wurden von anderen Personen in den Papierkorb verschoben.",
+			"includeOthers": "Auch Aufgaben löschen, die andere in den Papierkorb verschoben haben"
+		},
+		"open": "Papierkorb öffnen",
+		"taskInTrash": "Diese Aufgabe ist im Papierkorb. Sie wurde {since} gelöscht.",
+		"taskInTrashBy": "Diese Aufgabe ist im Papierkorb. {user} hat sie {since} gelöscht.",
+		"taskInTrashTitle": "Aufgabe im Papierkorb",
+		"inTrash": "Im Papierkorb",
+		"daysLeftShort": "wird heute endgültig gelöscht | noch {count} Tag | noch {count} Tage",
+		"deletedByYou": "Von dir {since} gelöscht",
+		"taskInTrashByYou": "Diese Aufgabe ist im Papierkorb. Du hast sie {since} gelöscht.",
+		"tabs": {
+			"label": "Bereiche des Papierkorbs"
+		},
+		"restoreProjectSuccess": "Das Projekt wurde wiederhergestellt.",
+		"restoreParentProject": "Übergeordnetes Projekt wiederherstellen",
+		"deleteProjectForeverSuccess": "Das Projekt wurde endgültig gelöscht.",
+		"noProjects": "Im Papierkorb sind keine Projekte.",
+		"subProjects": "+{count} Unterprojekt | +{count} Unterprojekte",
+		"deleteProjectForeverModal": {
+			"header": "Dieses Projekt endgültig löschen",
+			"text": "Damit wird „{project}“ mit allen Unterprojekten, Aufgaben, Ansichten und Freigaben endgültig gelöscht. Zeiteinträge bleiben ohne Projekt bei den Personen, die sie erfasst haben. Dies kann nicht rückgängig gemacht werden."
+		},
+		"emptyProjectsModal": {
+			"text": "Es gibt keine Projekte, die du löschen kannst. | Damit wird 1 Projekt mit allem, was darin ist, endgültig gelöscht. Dies kann nicht rückgängig gemacht werden. | Damit werden {count} Projekte mit allem, was darin ist, endgültig gelöscht. Dies kann nicht rückgängig gemacht werden.",
+			"byOthers": "Eines davon wurde von jemand anderem in den Papierkorb verschoben. | {count} davon wurden von anderen Personen in den Papierkorb verschoben.",
+			"includeOthers": "Auch Projekte löschen, die andere in den Papierkorb verschoben haben"
+		},
+		"projectInTrash": "Dieses Projekt ist im Papierkorb. Es wurde {since} gelöscht.",
+		"projectInTrashBy": "Dieses Projekt ist im Papierkorb. {user} hat es {since} gelöscht.",
+		"projectInTrashByYou": "Dieses Projekt ist im Papierkorb. Du hast es {since} gelöscht."
 	}
 }

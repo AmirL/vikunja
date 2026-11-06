@@ -50,15 +50,22 @@ func EmailUpdateMessage() string {
 // (kicking off confirmation when the mailer is enabled). Shared by the v1 and
 // v2 email-update handlers; only HTTP input binding stays in the handlers.
 func ChangeUserEmail(ctx context.Context, s *xorm.Session, u *User, password, newEmail string) error {
-	var verified *User
-	err := ThrottleReauth(u.ID, func() (err error) {
-		verified, err = CheckUserCredentials(ctx, s, &Login{Username: u.Username, Password: password})
-		return err
-	})
+	if password == "" {
+		return ErrNoUsernamePassword{}
+	}
+
+	target, err := GetUserByID(s, u.ID)
 	if err != nil {
 		return err
 	}
-	return UpdateEmail(s, &EmailUpdate{User: verified, NewEmail: newEmail})
+	if !target.IsLocalUser() {
+		return &ErrAccountIsNotLocal{UserID: target.ID}
+	}
+
+	if err := CheckReauthPassword(ctx, s, target, password); err != nil {
+		return err
+	}
+	return UpdateEmail(s, &EmailUpdate{User: target, NewEmail: newEmail})
 }
 
 // UpdateEmail stages the address as PendingEmail until confirmed; with the mailer off it applies immediately.

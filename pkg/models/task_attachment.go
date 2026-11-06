@@ -52,7 +52,7 @@ import (
 type TaskAttachment struct {
 	ID     int64 `xorm:"bigint autoincr not null unique pk" json:"id" param:"attachment" readOnly:"true" doc:"The unique, numeric id of this attachment."`
 	TaskID int64 `xorm:"bigint not null" json:"task_id" param:"task" readOnly:"true" doc:"The id of the task this attachment belongs to. Taken from the URL, not the body."`
-	FileID int64 `xorm:"bigint not null" json:"-"`
+	FileID int64 `xorm:"bigint not null index" json:"-"`
 
 	CreatedByID int64      `xorm:"bigint not null" json:"-"`
 	CreatedBy   *user.User `xorm:"-" json:"created_by" readOnly:"true" doc:"The user who uploaded this attachment."`
@@ -87,6 +87,10 @@ func (ta *TaskAttachment) NewAttachment(s *xorm.Session, f io.ReadSeeker, realna
 	ta.FileID = file.ID
 
 	ta.CreatedBy, err = GetUserOrLinkShareUser(s, a)
+	if err == nil {
+		// After the upload, so a slow upload doesn't hold the task row lock.
+		_, err = lockTaskForWrite(s, a, ta.TaskID)
+	}
 	if err != nil {
 		// remove the  uploaded file if adding it to the db fails
 		if err2 := file.Delete(s); err2 != nil {
@@ -585,6 +589,9 @@ func (ta *TaskAttachment) Delete(s *xorm.Session, a web.Auth) error {
 	if err != nil && !files.IsErrFileDoesNotExist(err) {
 		return err
 	}
+	if _, err := lockTaskForWrite(s, a, ta.TaskID); err != nil {
+		return err
+	}
 
 	// Delete it
 	_, err = s.
@@ -604,7 +611,7 @@ func (ta *TaskAttachment) Delete(s *xorm.Session, a web.Auth) error {
 		return err
 	}
 
-	doer, _ := user.GetFromAuth(a)
+	doer := doerFromAuth(s, a)
 	task, err := GetTaskByIDSimple(s, ta.TaskID)
 	if err != nil {
 		return err

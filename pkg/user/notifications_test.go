@@ -18,7 +18,10 @@ package user
 
 import (
 	"testing"
+	"time"
 
+	"code.vikunja.io/api/pkg/db"
+	"code.vikunja.io/api/pkg/i18n"
 	"code.vikunja.io/api/pkg/notifications"
 
 	"github.com/stretchr/testify/assert"
@@ -49,4 +52,53 @@ func TestNotificationLinksKeepTokensOutOfTheQuery(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestShouldNotify(t *testing.T) {
+	tests := map[string]struct {
+		userID       int64
+		notification notifications.Notification
+		want         bool
+	}{
+		"active user":                        {userID: 1, notification: &PasswordChangedNotification{}, want: true},
+		"locked user, ordinary notification": {userID: 18, notification: &PasswordChangedNotification{}, want: false},
+		"locked user, password reset":        {userID: 18, notification: &ResetPasswordNotification{}, want: true},
+		"disabled user, password reset":      {userID: 17, notification: &ResetPasswordNotification{}, want: false},
+		"bot user, password reset":           {userID: 23, notification: &ResetPasswordNotification{}, want: false},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			db.LoadAndAssertFixtures(t)
+			s := db.NewSession()
+			defer s.Close()
+
+			u, err := loadUser(s, &User{ID: tt.userID}, false)
+			require.NoError(t, err)
+
+			got, err := u.ShouldNotify(tt.notification, s)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIdentityLinkedNotification(t *testing.T) {
+	i18n.Init()
+	n := &IdentityLinkedNotification{
+		User: &User{
+			Username: "user1",
+			Timezone: "Europe/Berlin",
+		},
+		ProviderName: "Authentik",
+		Linked:       time.Date(2026, 11, 4, 9, 30, 0, 0, time.UTC),
+	}
+
+	mail := n.ToMail("en")
+	opts, err := notifications.RenderMail(mail, "en")
+	require.NoError(t, err)
+
+	assert.Equal(t, "Authentik was linked to your Vikunja account", opts.Subject)
+	assert.Contains(t, opts.Message, "Your Authentik account was linked to your Vikunja account on 2026-11-04 10:30 CET.")
+	assert.Contains(t, opts.Message, "change your password immediately, then unlink it in your account settings")
+	assert.Contains(t, opts.Message, "user/settings/linked-accounts")
 }

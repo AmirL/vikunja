@@ -20,6 +20,8 @@ import (
 	"net/http"
 	"testing"
 
+	"code.vikunja.io/api/pkg/config"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,6 +29,8 @@ import (
 // Re-auth endpoints must not let a stolen session brute-force the password (GHSA-49pj-52x6-8gpj).
 func TestReauthThrottle(t *testing.T) {
 	const failureLimit = 10
+	config.AuthOpenIDEnabled.Set(true)
+	t.Cleanup(func() { config.AuthOpenIDEnabled.Set(false) })
 
 	for _, tc := range []struct {
 		name, method, path, wrong, right string
@@ -47,19 +51,22 @@ func TestReauthThrottle(t *testing.T) {
 		{"v2 password change", http.MethodPost, "/api/v2/user/password", `{"old_password":"wrong","new_password":"newpassword1"}`, `{"old_password":"12345678","new_password":"newpassword1"}`},
 		{"v1 email change", http.MethodPost, "/api/v1/user/settings/email", `{"new_email":"new@example.com","password":"wrong"}`, `{"new_email":"new@example.com","password":"12345678"}`},
 		{"v2 email change", http.MethodPut, "/api/v2/user/settings/email", `{"new_email":"new@example.com","password":"wrong"}`, `{"new_email":"new@example.com","password":"12345678"}`},
+		{"v2 identity link", http.MethodPost, "/api/v2/user/settings/identities", `{"provider":"p","code":"c","redirect_url":"https://localhost","password":"wrong"}`, `{"provider":"p","code":"c","redirect_url":"https://localhost","password":"12345678"}`},
+		{"v2 identity unlink", http.MethodPost, "/api/v2/user/settings/identities/1/unlink", `{"password":"wrong"}`, `{"password":"12345678"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e, err := setupTestEnv()
 			require.NoError(t, err)
 			token := humaTokenFor(t, &testuser10)
 
-			for i := 0; i < failureLimit; i++ {
+			for i := range failureLimit {
 				rec := humaRequest(t, e, tc.method, tc.path, tc.wrong, token, "")
 				require.Equal(t, http.StatusForbidden, rec.Code, "attempt %d; body: %s", i, rec.Body.String())
 			}
 
+			// The 10th wrong password locks the account, revoking the session.
 			rec := humaRequest(t, e, tc.method, tc.path, tc.right, token, "")
-			assert.Equal(t, http.StatusTooManyRequests, rec.Code, "body: %s", rec.Body.String())
+			assert.Equal(t, http.StatusUnauthorized, rec.Code, "body: %s", rec.Body.String())
 		})
 	}
 

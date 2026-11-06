@@ -18,6 +18,7 @@ package caldav
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -623,11 +624,11 @@ func (vcls *VikunjaCaldavProjectStorage) CreateResource(rpath, content string) (
 	}
 
 	// Inbound CalDAV descriptions are markdown; store them as canonical HTML.
-	if err := applyDescriptionFromMarkdown(s, vTask, ""); err != nil {
+	if err := applyDescriptionFromMarkdown(s, vcls.user, vTask, ""); err != nil {
 		log.Errorf("[CALDAV] Failed to convert description in CreateResource: %v", err)
 		_ = s.Rollback()
 		events.CleanupPending(s)
-		return nil, err
+		return nil, caldavTaskWriteError(err)
 	}
 
 	// Create the task
@@ -636,7 +637,7 @@ func (vcls *VikunjaCaldavProjectStorage) CreateResource(rpath, content string) (
 		log.Errorf("[CALDAV] Failed to create task in CreateResource: %v, task: %+v", err, vTask)
 		_ = s.Rollback()
 		events.CleanupPending(s)
-		return nil, err
+		return nil, caldavTaskWriteError(err)
 	}
 
 	vcls.task.ID = vTask.ID
@@ -677,13 +678,13 @@ func (vcls *VikunjaCaldavProjectStorage) CreateResource(rpath, content string) (
 // applyDescriptionFromMarkdown converts a task's inbound CalDAV description
 // (markdown) to canonical HTML, rebuilding @mentions. Unchanged markdown keeps the
 // stored HTML verbatim, so a no-op read-modify-write doesn't churn it or move Updated.
-func applyDescriptionFromMarkdown(s *xorm.Session, vTask *models.Task, storedHTML string) error {
+func applyDescriptionFromMarkdown(s *xorm.Session, viewer *user2.User, vTask *models.Task, storedHTML string) error {
 	if !richtext.Changed(storedHTML, vTask.Description) {
 		vTask.Description = storedHTML
 		return nil
 	}
 
-	htmlDesc, err := richtext.MarkdownToHTMLWithMentions(s, vTask.Description)
+	htmlDesc, err := richtext.MarkdownToHTMLWithMentions(s, viewer, vTask.Description)
 	if err != nil {
 		return err
 	}
@@ -777,11 +778,11 @@ func (vcls *VikunjaCaldavProjectStorage) UpdateResource(rpath, content string) (
 	}
 
 	// Inbound markdown → canonical HTML, kept verbatim when unchanged.
-	if err := applyDescriptionFromMarkdown(s, vTask, stored.Description); err != nil {
+	if err := applyDescriptionFromMarkdown(s, vcls.user, vTask, stored.Description); err != nil {
 		log.Errorf("[CALDAV] Failed to convert description in UpdateResource: %v", err)
 		_ = s.Rollback()
 		events.CleanupPending(s)
-		return nil, err
+		return nil, caldavTaskWriteError(err)
 	}
 
 	// Overlay only what the VTODO expressed; everything else keeps its stored value.
@@ -820,7 +821,7 @@ func (vcls *VikunjaCaldavProjectStorage) UpdateResource(rpath, content string) (
 		log.Errorf("[CALDAV] Failed to update task in UpdateResource: %v, task: %+v", err, base)
 		_ = s.Rollback()
 		events.CleanupPending(s)
-		return nil, err
+		return nil, caldavTaskWriteError(err)
 	}
 
 	// nil = CATEGORIES absent, leave labels alone; non-nil (even empty) = explicit set.
@@ -1110,6 +1111,9 @@ type VikunjaProjectResourceAdapter struct {
 
 	isPrincipal  bool
 	isCollection bool
+
+	// Rendered once per request: a multistatus response asks for it per requested property.
+	content *string
 }
 
 // IsCollection checks if the resoure in the adapter is a collection
@@ -1144,11 +1148,23 @@ func (vlra *VikunjaProjectResourceAdapter) CalculateEtag() string {
 		}
 	}
 
-	return `"` + strconv.FormatInt(vlra.project.ID, 10) + `-` + strconv.FormatInt(latest.Unix(), 10) + `"`
+	etag := strconv.FormatInt(vlra.project.ID, 10) + "-" + strconv.FormatInt(latest.Unix(), 10)
+	if !vlra.project.LastPurgedAt.IsZero() {
+		etag += ";purge=" + strconv.FormatInt(vlra.project.LastPurgedAt.Unix(), 10)
+	}
+	return `"` + etag + `"`
 }
 
 // GetContent returns the content string of a resource (a task in our case)
 func (vlra *VikunjaProjectResourceAdapter) GetContent() string {
+	if vlra.content == nil {
+		content := vlra.renderContent()
+		vlra.content = &content
+	}
+	return *vlra.content
+}
+
+func (vlra *VikunjaProjectResourceAdapter) renderContent() string {
 	if vlra.project != nil && vlra.projectTasks != nil {
 		return caldav.GetCaldavTodosForTasks(vlra.project, vlra.projectTasks)
 	}
@@ -1242,4 +1258,13 @@ func addTaskResource(collectionProjectID int64, task *models.Task, rr *VikunjaPr
 	taskResourceInstance := data.NewResource(taskURL(collectionProjectID, task), rr)
 	taskResourceInstance.Name = task.Title
 	*resources = append(*resources, taskResourceInstance)
+}
+
+// caldav-go answers anything but its own errors with 500.
+func caldavTaskWriteError(err error) error {
+	var validationErr models.ValidationHTTPError
+	if errors.As(err, &validationErr) || errors.Is(err, richtext.ErrTooManyTableCells) {
+		return errs.ForbiddenError
+	}
+	return err
 }

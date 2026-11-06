@@ -102,6 +102,14 @@ func getProjectsToDelete(s *xorm.Session, u *user.User) (projectsToDelete []*Pro
 		return nil, err
 	}
 
+	// getAllProjectsForUser skips the trash.
+	trashed := []*Project{}
+	err = s.Unscoped().Where(builder.And(builder.Eq{"owner_id": u.ID}, builder.NotNull{"deleted_at"})).Find(&trashed)
+	if err != nil {
+		return nil, err
+	}
+	projects = append(projects, trashed...)
+
 	for _, l := range projects {
 		if l.ID < 0 || l.OwnerID != u.ID {
 			continue
@@ -133,13 +141,34 @@ func getProjectsToDelete(s *xorm.Session, u *user.User) (projectsToDelete []*Pro
 // This action is irrevocable.
 // Public to allow deletion from the CLI.
 func DeleteUser(s *xorm.Session, u *user.User) (err error) {
+	ownedBots := []*user.User{}
+	if err = s.Where("bot_owner_id = ?", u.ID).Find(&ownedBots); err != nil {
+		return err
+	}
+	ownerIDs := []int64{u.ID}
+	for _, bot := range ownedBots {
+		ownerIDs = append(ownerIDs, bot.ID)
+	}
+	projects := []*Project{}
+	if err = s.Unscoped().In("owner_id", ownerIDs).Find(&projects); err != nil {
+		return err
+	}
+	projectIDs, _ := getProjectIDsFromProjects(projects)
+	views, err := lockProjectTreeViewsForPositionUpdate(s, projectIDs...)
+	if err != nil {
+		return err
+	}
+	return deleteUserInViews(s, u, views)
+}
+
+func deleteUserInViews(s *xorm.Session, u *user.User, views []*ProjectView) (err error) {
 	// Delete any bot users owned by this user first (cascades their data too).
 	var ownedBots []*user.User
 	if err = s.Where("bot_owner_id = ?", u.ID).Find(&ownedBots); err != nil {
 		return err
 	}
 	for _, bot := range ownedBots {
-		if err = DeleteUser(s, bot); err != nil {
+		if err = deleteUserInViews(s, bot, views); err != nil {
 			return err
 		}
 	}
@@ -151,13 +180,10 @@ func DeleteUser(s *xorm.Session, u *user.User) (err error) {
 
 	for _, p := range projectsToDelete {
 		if p.parentID() != 0 {
-			// Child projects are deleted by p.Delete
+			// Child projects are deleted with their parent
 			continue
 		}
-		err = p.Delete(s, u)
-		// If the user is the owner of the default project it will be deleted, if they are not the owner
-		// we can ignore the error as the project was shared in that case.
-		if err != nil && !IsErrCannotDeleteDefaultProject(err) {
+		if err = hardDeleteProjectInViews(s, p, nil, views); err != nil {
 			return err
 		}
 	}
@@ -181,6 +207,7 @@ func DeleteUser(s *xorm.Session, u *user.User) (err error) {
 		{"user_id", &Favorite{}},
 		{"owner_id", &APIToken{}},
 		{"created_by_id", &Webhook{}},
+		{"user_id", &user.Identity{}},
 	}
 
 	for _, entity := range relatedEntities {
@@ -188,6 +215,12 @@ func DeleteUser(s *xorm.Session, u *user.User) (err error) {
 		if err != nil {
 			return err
 		}
+	}
+
+	// Container-less entries are author-only and would become unreachable.
+	err = deleteUserPrivateTimeEntries(s, u.ID)
+	if err != nil {
+		return err
 	}
 
 	err = DeleteAllUserSessions(s, u.ID)
@@ -268,7 +301,8 @@ func ensureProjectAdminUser(s *xorm.Session, l *Project) (hadUsers bool, err err
 		return true, err
 	}
 
-	_, err = s.Where("id = ?", l.ID).
+	_, err = s.Unscoped().
+		Where("id = ?", l.ID).
 		Cols("owner_id").
 		Update(&Project{OwnerID: firstUser.UserID})
 	if err != nil {
