@@ -86,6 +86,20 @@ func (tp *TaskPosition) CanUpdate(s *xorm.Session, a web.Auth) (bool, error) {
 	return canRead, nil
 }
 
+func lockTaskInView(s *xorm.Session, a web.Auth, view *ProjectView, taskID int64) error {
+	if _, err := lockTaskForWrite(s, a, taskID); err != nil {
+		return err
+	}
+	fits, err := taskFitsView(s, a, view, taskID)
+	if err != nil {
+		return err
+	}
+	if !fits {
+		return ErrGenericForbidden{}
+	}
+	return nil
+}
+
 func taskFitsView(s *xorm.Session, a web.Auth, view *ProjectView, taskID int64) (bool, error) {
 	if filterID := GetSavedFilterIDFromProjectID(view.ProjectID); filterID > 0 {
 		return taskMatchesSavedFilterView(s, a, view, filterID, taskID)
@@ -347,6 +361,17 @@ func updateTaskPosition(s *xorm.Session, a web.Auth, tp *TaskPosition) (err erro
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /tasks/{id}/position [post]
 func (tp *TaskPosition) Update(s *xorm.Session, a web.Auth) (err error) {
+	view, err := GetProjectViewByID(s, tp.ProjectViewID)
+	if err != nil {
+		return err
+	}
+	if err = lockViewsForPositionUpdate(s, []*ProjectView{view}); err != nil {
+		return err
+	}
+	if err = lockTaskInView(s, a, view, tp.TaskID); err != nil {
+		return err
+	}
+
 	err = updateTaskPosition(s, a, tp)
 	if err != nil {
 		return err
@@ -474,7 +499,8 @@ func getPositionsForView(s *xorm.Session, view *ProjectView) (positions []*TaskP
 	return
 }
 
-// AddPositionsToTasks fills Positions with each task's stored position in every view.
+// AddPositionsToTasks fills Positions with each task's stored position in every
+// view of its own project.
 func AddPositionsToTasks(s *xorm.Session, tasks []*Task) error {
 	taskMap := make(map[int64]*Task, len(tasks))
 	ids := make([]int64, 0, len(tasks))
@@ -489,7 +515,12 @@ func AddPositionsToTasks(s *xorm.Session, tasks []*Task) error {
 		return nil
 	}
 	positions := []*TaskPosition{}
-	err := s.In("task_id", ids).Find(&positions)
+	err := s.
+		Select("task_positions.*").
+		Join("INNER", "tasks", "tasks.id = task_positions.task_id").
+		Join("INNER", "project_views", "project_views.id = task_positions.project_view_id AND project_views.project_id = tasks.project_id").
+		In("task_positions.task_id", ids).
+		Find(&positions)
 	if err != nil {
 		return err
 	}

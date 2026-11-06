@@ -38,12 +38,13 @@
 						<template #item="{element: bucket, index: bucketIndex }">
 							<li
 								class="bucket"
-								:class="{'is-collapsed': collapsedBuckets[bucket.id]}"
+								:class="{'is-collapsed': isCollapsed(bucket)}"
 								:data-bucket-id="bucket.id"
 							>
 								<div
 									class="bucket-header"
 									@click="() => unCollapseBucket(bucket)"
+									@dragenter="() => expandWhileDragging(bucket)"
 								>
 									<span
 										v-if="bucket.id !== 0 && view?.done_bucket_id === bucket.id"
@@ -66,10 +67,20 @@
 									</h2>
 									<span
 										v-if="bucket.limit > 0 || alwaysShowBucketTaskCount"
-										:class="{'is-max': bucket.limit > 0 && bucket.count >= bucket.limit}"
+										v-tooltip="isBucketFull(bucket) ? $t('project.kanban.bucketLimitReached') : ''"
+										:class="{'is-max': isBucketFull(bucket)}"
 										class="limit"
 									>
+										<Icon
+											v-if="isBucketFull(bucket)"
+											icon="exclamation-circle"
+											class="mie-1"
+										/>
 										{{ bucket.limit > 0 ? `${bucket.count}/${bucket.limit}` : bucket.count }}
+										<span
+											v-if="isBucketFull(bucket)"
+											class="is-sr-only"
+										>{{ $t('project.kanban.bucketLimitReachedShort') }}</span>
 									</span>
 									<Dropdown
 										v-if="canWrite && !collapsedBuckets[bucket.id]"
@@ -199,12 +210,12 @@
 											</div>
 											<XButton
 												v-else
-												v-tooltip="bucket.limit > 0 && bucket.count >= bucket.limit ? $t('project.kanban.bucketLimitReached') : ''"
+												v-tooltip="isBucketFull(bucket) ? $t('project.kanban.bucketLimitReached') : ''"
 												class="is-fullwidth has-text-centered"
 												:shadow="false"
 												icon="plus"
 												variant="secondary"
-												:disabled="bucket.limit > 0 && bucket.count >= bucket.limit"
+												:disabled="isBucketFull(bucket)"
 												@click="toggleShowNewTaskInput(bucket.id)"
 											>
 												{{
@@ -399,6 +410,7 @@ const newTaskInputFocused = ref(false)
 
 const showSetLimitInput = ref(false)
 const collapsedBuckets = ref<CollapsedBuckets>({})
+const dragExpandedBuckets = ref(new Set<number>())
 
 // URL-synchronized filter parameters
 const filter = useRouteQuery('filter')
@@ -581,6 +593,7 @@ async function updateTaskPosition(e: SortableEvent & {originalEvent?: MouseEvent
 	const project = projectId.value
 	const view = props.viewId
 	drag.value = false
+	dragExpandedBuckets.value.clear()
 	try {
 		const {moved} = await handleTaskDropToProject(e, task => {
 			// A moved task stays in a pseudo-project board (favorites, saved filters) until the board is re-read.
@@ -645,7 +658,7 @@ async function addTaskToBucket(bucketId: number) {
 	scrollTaskContainerToTop(bucketId)
 
 	const bucket = getBucketById(bucketId)
-	if (bucket && bucket.limit && bucket.count >= bucket.limit) {
+	if (bucket && isBucketFull(bucket)) {
 		toggleShowNewTaskInput(bucketId)
 	}
 }
@@ -793,6 +806,10 @@ async function setBucketLimit(bucketId: number, now: boolean = false) {
 	setBucketLimitCancel.value = setTimeout(saveBucketLimit, 2500, bucketId, limit)
 }
 
+function isBucketFull(bucket: BucketResponse) {
+	return bucket.limit > 0 && bucket.count >= bucket.limit
+}
+
 function shouldAcceptDrop(bucket: BucketResponse) {
 	return (
 		// When dragging from a bucket who has its limit reached, dragging should still be possible
@@ -857,6 +874,17 @@ function toggleDoneBucket(bucket: BucketResponse) {
 function collapseBucket(bucket: BucketResponse) {
 	collapsedBuckets.value[bucket.id] = true
 	saveCollapsedBucketState(projectIdWithFallback.value, collapsedBuckets.value)
+}
+
+function isCollapsed(bucket: BucketResponse) {
+	return collapsedBuckets.value[bucket.id] && !dragExpandedBuckets.value.has(bucket.id)
+}
+
+// Collapsed buckets hide their task list, leaving nothing to drop on.
+function expandWhileDragging(bucket: BucketResponse) {
+	if (drag.value && collapsedBuckets.value[bucket.id]) {
+		dragExpandedBuckets.value.add(bucket.id)
+	}
 }
 
 function unCollapseBucket(bucket: BucketResponse) {
@@ -1037,6 +1065,7 @@ $filter-container-height: '1rem - #{$switch-view-height}';
 		.limit {
 			padding: 0 .5rem;
 			font-weight: bold;
+			white-space: nowrap;
 
 			&.is-max {
 				color: var(--danger-text);

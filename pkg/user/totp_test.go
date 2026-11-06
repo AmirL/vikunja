@@ -17,6 +17,7 @@
 package user
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -56,6 +57,34 @@ func TestTOTPPasscodeCannotBeReused(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.True(t, IsErrTOTPPasscodeUsed(err), "expected ErrTOTPPasscodeUsed, got: %v", err)
+}
+
+func TestTOTPPasscodeWhitespaceVariantsCannotBeReused(t *testing.T) {
+	db.LoadAndAssertFixtures(t)
+	s := db.NewSession()
+	defer s.Close()
+
+	secret := "JBSWY3DPEHPK3PXP" //nolint:gosec
+	// Previous window: still valid, but not consumed by TestTOTPPasscodeCannotBeReused.
+	passcode, err := totp.GenerateCode(secret, time.Now().Add(-30*time.Second))
+	require.NoError(t, err)
+
+	user := &User{ID: 10}
+
+	_, err = ValidateTOTPPasscode(s, &TOTPPasscode{User: user, Passcode: " " + passcode + "\t"})
+	require.NoError(t, err)
+
+	for _, variant := range []string{passcode, " " + passcode, passcode + " ", "\n" + passcode + "\n"} {
+		_, err = ValidateTOTPPasscode(s, &TOTPPasscode{User: user, Passcode: variant})
+		require.Error(t, err, "variant %q", variant)
+		assert.True(t, IsErrTOTPPasscodeUsed(err), "variant %q: expected ErrTOTPPasscodeUsed, got: %v", variant, err)
+	}
+
+	for _, invalid := range []string{passcode[:3] + " " + passcode[3:], "+" + passcode[1:], passcode + "0", ""} {
+		_, err = ValidateTOTPPasscode(s, &TOTPPasscode{User: user, Passcode: invalid})
+		require.Error(t, err, "invalid %q", invalid)
+		assert.True(t, IsErrInvalidTOTPPasscode(err), "invalid %q: expected ErrInvalidTOTPPasscode, got: %v", invalid, err)
+	}
 }
 
 func TestHandleFailedTOTPAuthLocksAccount(t *testing.T) {
@@ -143,11 +172,12 @@ func TestEnrollTOTPRequiresPassword(t *testing.T) {
 	require.NoError(t, err)
 	_ = keyvalue.Del(reauthAttemptsKey(u.ID))
 
-	_, err = EnrollTOTP(s, u, "wrong")
+	_, err = EnrollTOTP(context.Background(), s, u, "wrong")
 	assert.True(t, IsErrWrongUsernameOrPassword(err), "got %v", err)
+	assert.Equal(t, int64(1), kvCount(t, reauthAttemptsKey(u.ID)))
 	db.AssertMissing(t, "totp", map[string]any{"user_id": u.ID})
 
-	enrolled, err := EnrollTOTP(s, u, "12345678")
+	enrolled, err := EnrollTOTP(context.Background(), s, u, "12345678")
 	require.NoError(t, err)
 	assert.False(t, enrolled.Enabled)
 }
@@ -164,10 +194,10 @@ func TestEnableTOTPRequiresPassword(t *testing.T) {
 	passcode, err := totp.GenerateCode("HXDMVJECJJWSRB3HWIZR4IFUGFTMXBOZ", time.Now())
 	require.NoError(t, err)
 
-	err = EnableTOTP(s, u, "wrong", passcode)
+	err = EnableTOTP(context.Background(), s, u, "wrong", passcode)
 	assert.True(t, IsErrWrongUsernameOrPassword(err), "got %v", err)
 
-	err = EnableTOTP(s, u, "12345678", passcode)
+	err = EnableTOTP(context.Background(), s, u, "12345678", passcode)
 	require.NoError(t, err)
 	enabled, err := TOTPEnabledForUser(s, u)
 	require.NoError(t, err)
